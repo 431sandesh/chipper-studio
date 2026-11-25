@@ -21,7 +21,7 @@ Nothing is posted until you press **Post**.
 |---|---|---|
 | System | Windows 10 or 11 | macOS 12 or newer, Apple silicon or Intel |
 | Disk space | about 2 GB, plus room for recordings (2–3 GB per hour of stream) | same |
-| Installed for you | Python 3.12, FFmpeg, cloudflared | Homebrew, Python 3.12, FFmpeg, cloudflared |
+| Installed for you | Python 3.12, FFmpeg, cloudflared | Python 3.12, FFmpeg, cloudflared (Apple silicon Macs also get Homebrew) |
 
 AI Enhance (NVIDIA video upscaling) needs an NVIDIA graphics card, so it only works on Windows. Everything else works on both.
 
@@ -41,13 +41,15 @@ If Windows shows "Windows protected your PC", click **More info**, then **Run an
 
 1. Download this repo: the green **Code** button, then **Download ZIP**. Unzip it, then move the folder somewhere easy, for example your home folder.
 2. Open the folder, right-click **install-mac.command** and choose **Open**, then **Open** again. (Right-click is needed the first time because the file came from the internet.)
-   - It installs Homebrew if you don't have it. That step asks for your Mac password. Nothing appears on screen while you type it, which is normal.
+   - On an **Intel Mac**, it downloads FFmpeg and cloudflared into the Chipper folder. No password needed.
+   - On an **Apple silicon Mac** (M1 or newer), it installs Homebrew if you don't have it. That step asks for your Mac password. Nothing appears on screen while you type it, which is normal.
+   - Python 3.12 is set up inside the Chipper folder, so it doesn't touch the rest of your Mac.
    - It asks whether to install Whisper for captions on your Mac (about 2 GB).
 3. When it says **Done**, double-click **run-mac.command**. Your browser opens at http://127.0.0.1:5050.
 
 Keep the Terminal window open while you use Chipper. Close it to quit.
 
-If double-clicking does nothing, open **Terminal**, type `cd ` (with a space), drag the Chipper folder into the window, press Return, then run:
+If double-clicking does nothing, open **Terminal**, type `cd ` (with a space), drag the Chipper folder into the window, press Return, then type these yourself (pasting can add hidden characters that break them):
 
 ```
 bash install-mac.command

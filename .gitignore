@@ -32,3 +32,6 @@ enhance_env/
 Thumbs.db
 .idea/
 .vscode/
+
+# Tools the Mac installer downloads
+bin/

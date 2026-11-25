@@ -1,6 +1,6 @@
 # Chipper Studio
 
-Chipper Studio turns live streams and long videos into vertical 1080×1920 clips for TikTok, Reels and Shorts. It runs on your own computer (Windows or Mac), watches chat for the big moments, cuts the clips, adds facecam layouts, captions, hooks, titles and hashtags, and lets you edit and post them from your browser or your Android phone.
+Chipper Studio turns live streams and long videos into vertical 1080×1920 clips for TikTok, Reels and Shorts. It runs on your own computer (Windows or Mac), watches chat for the big moments, cuts the clips, adds facecam layouts, captions, hooks, titles and hashtags and lets you edit and post them from your browser.
 
 Nothing is posted until you press **Post**.
 
@@ -13,7 +13,7 @@ Nothing is posted until you press **Post**.
 - **Thumbnail editor**: a free canvas with frames from the clip, photos, text and stickers.
 - **AI writing** (optional, free keys work): hooks, titles, captions, hashtags and a score for each clip, using Groq, Gemini, Claude or Ollama on your own computer.
 - **Posting**: YouTube Shorts, Instagram Reels, Facebook Reels and TikTok (through the TikTok website).
-- **Phone access**: a private link to use Chipper from anywhere, plus an Android app (in the `android` folder).
+- **Phone access**: a private link to use Chipper from your phone or any other computer.
 
 ## What you need
 
@@ -64,15 +64,9 @@ bash run-mac.command
 
 1. **Settings → Remote access**: set a remote password (6+ characters) and press **Turn on**.
 2. A link like `https://some-random-words.trycloudflare.com` appears. Open it anywhere and enter your password.
-3. The link changes each time Chipper restarts. To get it automatically on your phone, use the Android app (it finds the new link for you), or install the free **ntfy** app and subscribe to the topic shown in Settings.
+3. The link changes each time Chipper restarts. To get it automatically on your phone, install the free **ntfy** app and subscribe to the topic shown in Settings.
 
 Over the link you can clip, edit and post. Keys, social accounts and remote access settings can only be changed on the computer running Chipper.
-
-### Android app
-
-The `android` folder has a native app: live streams, auto-clip, clips, a full video editor, the thumbnail editor and uploads from your phone. Each push to this repo builds an APK under **Releases** (look for "Chipper Studio for Android"). Download it on your phone and install it. The first time, enter your Chipper link and remote password; after that the app finds the new link by itself.
-
-To build it yourself, open the `android` folder in Android Studio and press Run. If you fork this repo and want each build to install over the last one, add your own signing key as the repo secrets `KEYSTORE_B64` (the .jks file in base64), `KEYSTORE_PASSWORD`, `KEY_ALIAS` and `KEY_PASSWORD`.
 
 ## Connecting your accounts
 
@@ -115,7 +109,7 @@ Inside the Chipper folder:
 
 - `work/rec`: full recordings (turn off "Keep full recordings" in Settings to delete them automatically)
 - `work/raw`: the source of each clip, so clips can be re-edited later
-- `uploads/audio`, `uploads/fx`, `uploads/images`, `uploads/other`: everything you upload from the phone or browser
+- `uploads/audio`, `uploads/fx`, `uploads/images`, `uploads/other`: everything you upload from the browser
 - `fonts`: extra fonts (.ttf or .otf) for captions and text
 - `settings.json`, `accounts.json`, `templates.json`: your settings, sign-ins and templates
 

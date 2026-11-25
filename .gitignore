@@ -23,11 +23,7 @@ venv/
 enhance_env/
 .vsr/
 
-# Android
-android/.gradle/
-android/build/
-android/app/build/
-android/local.properties
+# Signing keys
 *.jks
 *.keystore
 

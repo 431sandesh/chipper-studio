@@ -159,7 +159,15 @@ class TikTokWeb:
             from playwright.sync_api import sync_playwright
         except ImportError:
             raise TikTokError("TikTok posting needs Playwright: run install.bat (or: pip install playwright)") from None
-        pw = sync_playwright().start()
+        try:
+            pw = sync_playwright().start()
+        except Exception as e:  # noqa: BLE001 - the helper program that drives the browser could not start
+            import platform
+            mac = platform.mac_ver()[0]
+            hint = (f"macOS {mac} may be too old for this Playwright. Run in Terminal: "
+                    f"source .venv/bin/activate && python -m pip install 'playwright<1.49' && python -m playwright install chromium"
+                    if mac else "run the install script again")
+            raise TikTokError(f"the browser helper (Playwright) could not start: {str(e)[:100]}. {hint}") from None
         last = None
         for sandbox in (True, False):                     # Chrome's security sandbox on whenever possible
             for channel in ("chrome", "msedge", None):    # your installed Chrome/Edge first, else Playwright's own

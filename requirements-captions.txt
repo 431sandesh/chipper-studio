@@ -1,0 +1,3 @@
+# Optional: make captions on your own computer (about 2 GB with PyTorch).
+# Without it, captions come from YouTube's own captions or a free Groq key (Settings, AI).
+openai-whisper

@@ -1,0 +1,38 @@
+# Your own data: never uploaded
+settings.json
+accounts.json
+templates.json
+layouts.json
+watch.json
+yt_cookies.txt
+.secret
+LITE
+tiktok/
+work/
+clips/
+uploads/
+sounds/
+logs/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+enhance_env/
+.vsr/
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.jks
+*.keystore
+
+# System
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

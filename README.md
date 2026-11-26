@@ -13,6 +13,9 @@ Nothing is posted until you press **Post**.
 - **Thumbnail editor**: a free canvas with frames from the clip, photos, text and stickers.
 - **AI writing** (optional, free keys work): hooks, titles, captions, hashtags and a score for each clip, using Groq, Gemini, Claude or Ollama on your own computer.
 - **Posting**: YouTube Shorts, Instagram Reels, Facebook Reels and TikTok (through the TikTok website).
+- **Captions**: every new clip gets quick captions from a light, fast speech model. For the clips you keep, press **AI captions** in the editor to redo them with the best model (Whisper large-v3 on an NVIDIA graphics card, or Groq online).
+- **Uploads**: pictures, music and sounds you upload are kept in the `uploads` folder. **Settings → Files** lists them, so you can delete files or remove duplicates. In the editor's Image section, **Grab YT thumbnail** saves a YouTube video's thumbnail from its link.
+- **Posted clips**: deleting a posted clip removes the video but keeps its thumbnail and views in **Posted**. Delete it again there to remove it completely.
 - **Phone access**: a private link to use Chipper from your phone or any other computer.
 
 ## What you need
@@ -67,6 +70,8 @@ bash run-mac.command
 1. **Settings → Remote access**: set a remote password (6+ characters) and press **Turn on**.
 2. A link like `https://some-random-words.trycloudflare.com` appears. Open it anywhere and enter your password.
 3. The link changes each time Chipper restarts. To get it automatically on your phone, install the free **ntfy** app and subscribe to the topic shown in Settings.
+
+**A link that never changes (optional).** If your domain is on Cloudflare, create a tunnel in the Cloudflare dashboard (Zero Trust → Networks → Tunnels → Create a tunnel → Cloudflared). Copy the token (the long `eyJ…` text in the install command; don't run the command), add a public hostname such as `studio.yourdomain.com` pointing to `HTTP` `127.0.0.1:5050`, then paste the address and token in **Settings → Remote access → Permanent link** and turn remote access off and on. The token stays on your computer.
 
 Over the link you can clip, edit and post. Keys, social accounts and remote access settings can only be changed on the computer running Chipper.
 

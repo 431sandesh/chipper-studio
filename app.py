@@ -44,9 +44,22 @@ for _d in UP.values():
     os.makedirs(_d, exist_ok=True)
 
 
+ALIASES_F = os.path.join(UPLOADS, "aliases.json")
+
+
+def _aliases():
+    try:
+        with open(ALIASES_F, encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:
+        return {}
+
+
 def asset_path(fname):
-    """Where an editor file really is: the uploads folders first, then the older work/assets folder."""
+    """Where an editor file really is: the uploads folders first, then the older work/assets folder.
+    A duplicate that was removed points to the copy that was kept, so old clips still render."""
     fname = os.path.basename(fname or "")
+    fname = _aliases().get(fname, fname)
     for d in (UP["images"], UP["audio"], UP["other"], DIRS["assets"]):
         p = os.path.join(d, fname)
         if fname and os.path.isfile(p):
@@ -83,9 +96,11 @@ DEFAULT_SETTINGS = {
     "hashtags": "#gaming #clips #fyp #viral #streamer", "api_key": "", "ai_model": "",
     "ai_provider": "builtin", "ai_key": "",
     "remote_password": "", "remote_email": "", "remote_auto": True,
+    # permanent link: a Cloudflare named tunnel (token from the Cloudflare dashboard) and its address
+    "remote_tunnel_token": "", "remote_tunnel_host": "",
     "ntfy_topic": "", "ntfy_server": "https://ntfy.sh", "notify_link": True, "notify_clips": True,
     "last_logo": "",
-    "stt": "auto", "groq_key": "", "smart_trim": True, "ollama_url": "http://127.0.0.1:11434",
+    "stt": "auto", "stt_auto_model": "turbo", "groq_key": "", "smart_trim": True, "ollama_url": "http://127.0.0.1:11434",
     "template": "Default", "keep_recordings": True,
 }
 
@@ -420,10 +435,16 @@ class Job:
         self.clips = 0
         self.ctx = {}
 
+    def display(self):
+        """The streamer's name once it's known (YouTube channel, Twitch or TikTok name), else the stream's id."""
+        ch = ((self.ctx or {}).get("channel") or "").strip()
+        return ch or self.name
+
     def info(self):
         hist = [c[1] for c in self.chart]
         return {
-            "slot": self.slot, "state": self.state, "url": self.url, "name": self.name,
+            "slot": self.slot, "state": self.state, "url": self.url, "name": self.display(), "id_name": self.name,
+            "title": ((self.ctx or {}).get("title") or "")[:120],
             "template": self.template_name,
             "chat_connected": bool(self.chat and self.chat.connected),
             "recording": self.rec.path if self.rec else "",
@@ -549,14 +570,14 @@ class Job:
             ("_manual" if manual else f"_{n}msgs")
         clip_start_wall = now - max(0.0, off - start) - float(settings.get("delay") or 0)
         chat = self.chat.recent_timed(clip_start_wall, now) if self.chat else []
-        write_meta({"name": name, "created": now, "status": "waiting", "channel": self.name,
+        write_meta({"name": name, "created": now, "status": "waiting", "channel": self.display(),
                     "source": self.url, "msgs": n, "manual": manual, "chat": chat[-150:],
                     "length": round(length), "template": self.template(), "ctx": self.ctx,
                     "campaign": (getattr(self, "brief", "") or "")[:300],
                     "template_name": self.template_name or settings.get("template")})
         jobs.put({"kind": "new", "name": name, "rec": self.rec.path, "start": start,
                   "length": length, "ready_at": now + max(0.0, end - off) + 4,
-                  "chat": chat, "channel": self.name, "template": self.template(), "ctx": self.ctx})
+                  "chat": chat, "channel": self.display(), "template": self.template(), "ctx": self.ctx})
         self.clips += 1
         self.log(("MANUAL CLIP" if manual else f"CLIP {round(length)} s, peak {n} msgs") + f" -> {name}")
 
@@ -817,9 +838,36 @@ class VodJob:
                 time.sleep(2)
             self.set("done", 100, f"{len(keep)} clip{'s' if len(keep) != 1 else ''} ready - see the Clips tab")
             log(f"[vod] done: {len(keep)} clips from {self.title[:50]}")
+            self.drop_source(base)
         except Exception as e:  # noqa: BLE001
             self.set("error", msg=str(e)[:300])
             log(f"[vod] failed: {e}")
+            if url and "base" in locals():
+                self.drop_source(base)   # a retry downloads it again; an uploaded file is kept so it can be retried
+
+    @staticmethod
+    def drop_source(base):
+        """Delete the downloaded (or uploaded) video and its side files once clipping is over. The clips keep their own
+        short copy of their part, so editing and re-rendering still work."""
+        folder, stem = os.path.dirname(base), os.path.basename(base)
+        if os.path.normcase(os.path.abspath(folder)) != os.path.normcase(os.path.abspath(DIRS["vod"])) or not stem:
+            return
+        freed = 0
+        for f in os.listdir(folder):
+            if f == stem or f.startswith(stem + "."):
+                p = os.path.join(folder, f)
+                for _ in range(5):      # Windows can hold the file a moment after ffmpeg closes it
+                    try:
+                        sz = os.path.getsize(p)
+                        os.remove(p)
+                        freed += sz
+                        break
+                    except FileNotFoundError:
+                        break
+                    except OSError:
+                        time.sleep(2)
+        if freed:
+            log(f"[vod] deleted the source video ({freed / 1e6:.0f} MB freed)")
 
 
 vod = VodJob()
@@ -877,7 +925,7 @@ def post_worker():
                     raise P.PostError(str(e)) from None
             else:
                 raise P.PostError("unknown platform")
-            set_post(name, platform, status="posted", url=r["url"], error="", step="")
+            set_post(name, platform, status="posted", url=r["url"], id=r.get("id") or "", error="", step="")
             log(f"posted {name} to {platform}: {r['url']}")
         except Exception as e:  # noqa: BLE001
             set_post(name, platform, status="failed", error=str(e), step="")
@@ -885,6 +933,73 @@ def post_worker():
 
 
 threading.Thread(target=post_worker, daemon=True).start()
+
+
+# ---------------------------------------------------------------- views of posted clips
+def _post_id(platform, v):
+    if v.get("id"):
+        return str(v["id"])
+    u = v.get("url") or ""
+    m = re.search(r"youtube\.com/shorts/([\w-]{11})|youtu\.be/([\w-]{11})|[?&]v=([\w-]{11})", u) if platform.startswith(("yt:", "youtube")) else None
+    if m:
+        return next(g for g in m.groups() if g)
+    m = re.search(r"facebook\.com/reel/(\d+)", u) if platform.startswith("fb:") else None
+    return m.group(1) if m else ""
+
+
+def post_stats(name, refresh=False):
+    """Views, likes and comments for each platform a clip was posted to. Kept for 30 minutes; TikTok can't be read."""
+    m = read_meta(name) or {}
+    out = {}
+    for plat, v in (m.get("posts") or {}).items():
+        if v.get("status") != "posted" or plat.startswith("tt:") or plat == "tiktok":
+            continue                          # TikTok: no way to read views
+        st = v.get("stats") or {}
+        if not refresh and time.time() - (st.get("at") or 0) < 1800:
+            out[plat] = st
+            continue
+        vid = _post_id(plat, v)
+        try:
+            if not vid:
+                raise P.PostError("no post id saved")
+            if plat == "youtube" or plat.startswith("yt:"):
+                st = YT.stats(vid, plat[3:] if plat.startswith("yt:") else None)
+            elif plat == "instagram" or plat.startswith("ig:"):
+                st = IG.stats(vid, plat[3:] if plat.startswith("ig:") else None)
+            elif plat.startswith("fb:"):
+                st = FB.stats(vid, plat[3:])
+            else:
+                continue                      # TikTok: no way to read views
+            st["at"] = time.time()
+        except Exception as e:  # noqa: BLE001
+            st = {**st, "error": str(e)[:100], "at": time.time()}
+        with meta_lock:                       # not set_post: that would move the post's time (used for daily limits)
+            mm = load_json(meta_path(name), {"name": name})
+            if plat in mm.get("posts", {}):
+                mm["posts"][plat]["stats"] = st
+                save_json(meta_path(name), mm)
+        out[plat] = st
+    return out
+
+
+def stats_worker():
+    """Every 40 minutes, refresh the views of clips posted in the last 30 days."""
+    time.sleep(120)
+    while True:
+        try:
+            for f in os.listdir(DIRS["meta"]):
+                if not f.endswith(".json"):
+                    continue
+                m = load_json(os.path.join(DIRS["meta"], f), None) or {}
+                if any(v.get("status") == "posted" and time.time() - (v.get("at") or 0) < 30 * 86400 for v in (m.get("posts") or {}).values()):
+                    post_stats(m.get("name") or f[:-5])
+        except Exception as e:  # noqa: BLE001
+            log(f"[views] {e}")
+        time.sleep(2400)
+
+
+threading.Thread(target=stats_worker, daemon=True).start()
+
 
 # Scheduled posts + per-account daily limit and spacing. A post only ever starts from the owner pressing Post
 # (now or at the time they picked); the gate just waits until that account is allowed to post again.
@@ -983,17 +1098,50 @@ class Tunnel:
             raise RuntimeError("cloudflared is not installed. Run: " + ("brew install cloudflared" if IS_MAC else "winget install --id Cloudflare.cloudflared") + "  (then restart Chipper)")
         # Cloudflare's email protection blocks form submissions (POST), so the app's own
         # password lock protects the link instead.
-        cmd = [exe, "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{PORT}"]
+        token, host = self.fixed()
+        env = None
+        if token and host:
+            # permanent link (your own domain): the token goes in through the environment, not the command line
+            cmd = [exe, "tunnel", "--no-autoupdate", "run"]
+            env = {**os.environ, "TUNNEL_TOKEN": token}
+        else:
+            cmd = [exe, "tunnel", "--no-autoupdate", "--url", f"http://127.0.0.1:{PORT}"]
         self.state, self.url, self.error, self.manual_stop = "starting", "", "", False
-        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
                                      encoding="utf-8", errors="replace", creationflags=E.NO_WINDOW)
         threading.Thread(target=self._read, args=(self.proc,), daemon=True).start()
 
+    @staticmethod
+    def fixed():
+        """(token, host) of the permanent link, if set up."""
+        token = (settings.get("remote_tunnel_token") or "").strip()
+        host = re.sub(r"^https?://", "", (settings.get("remote_tunnel_host") or "").strip()).strip("/").lower()
+        return (token, host) if token and re.fullmatch(r"[a-z0-9.-]+\.[a-z]{2,}", host or "") else ("", "")
+
     def _read(self, proc):
         tail = deque(maxlen=8)
+        token, host = self.fixed()
         for line in proc.stdout:
-            tail.append(line.strip())
-            m = re.search(r"https://[a-z0-9-]+\.trycloudflare\.com", line)
+            tail.append(line.strip()[:400].replace(token, "•••") if token else line.strip()[:400])
+            if token and host:
+                # permanent link: it's up as soon as cloudflared connects to Cloudflare
+                if "Registered tunnel connection" in line and not self.url:
+                    self.url, self.state = f"https://{host}", "on"
+                    log(f"remote link (permanent): {self.url}")
+                    if settings.get("notify_link", True):
+                        notify("Chipper is online 📱", f"Tap to open your remote link:\n{self.url}", click=self.url, tags=["link"])
+                    try:
+                        with open(os.path.join(out_dir(), "Chipper remote link.txt"), "w", encoding="utf-8") as f:
+                            f.write(f"{self.url}\n\nYour permanent link. It stays the same when Chipper restarts.\n")
+                    except OSError:
+                        pass
+                elif "Unauthorized" in line or "Invalid tunnel secret" in line or "token is not valid" in line.lower():
+                    self.error = "Cloudflare refused the tunnel token - copy it again from the Cloudflare dashboard"
+                continue
+            # the real link is a random name like https://brave-lion-x.trycloudflare.com; never Cloudflare's own
+            # api.trycloudflare.com, which shows up in its error messages
+            m = None if re.search(r"(?i)\b(err|failed|error)\b", line) else \
+                re.search(r"https://(?!api\.|www\.)[a-z0-9]+(?:-[a-z0-9]+)+\.trycloudflare\.com", line)
             if m and not self.url:
                 self.url, self.state = m.group(0), "on"
                 log(f"remote link: {self.url}")
@@ -1011,16 +1159,23 @@ class Tunnel:
             text = " | ".join(tail)
             if "allowed-mail" in text and ("flag provided but not defined" in text or "unknown" in text.lower()):
                 self.error = "your cloudflared is too old for email protection: run  winget upgrade Cloudflare.cloudflared"
-            elif self.state != "off":
+            elif self.state != "off" and not self.error.startswith("Cloudflare refused"):
                 self.error = "tunnel stopped: " + text[-300:]
             self.state = "error" if self.error else "off"
             self.url = ""
             if self.error and settings.get("remote_auto") and not self.manual_stop:
-                self.restarts = [t for t in self.restarts if time.time() - t < 600]
-                if len(self.restarts) < 5:
-                    self.restarts.append(time.time())
-                    log("remote link dropped - reconnecting in 15 s")
-                    threading.Timer(15, self._restart).start()
+                # keep trying: quickly at first, then every few minutes (e.g. while the internet is down)
+                self.restarts = [t for t in self.restarts if time.time() - t < 1800]
+                self.restarts.append(time.time())
+                n = len(self.restarts)
+                wait = 15 if n <= 3 else 60 if n <= 6 else 300
+                if "status 429" in text or "Too Many Requests" in text:
+                    wait = 600                   # Cloudflare is rate-limiting this PC: retrying sooner only extends it
+                    self.error = "Cloudflare is busy giving out links (too many requests) - trying again in 10 min"
+                elif "trycloudflare.com/tunnel" in text or "deadline exceeded" in text:
+                    self.error = "couldn't reach Cloudflare to get a link (internet problem on the PC?) - retrying"
+                log(f"remote link dropped - reconnecting in {wait // 60} min" if wait >= 120 else f"remote link dropped - reconnecting in {wait} s")
+                threading.Timer(wait, self._restart).start()
 
     def _restart(self):
         if not self.manual_stop:
@@ -1278,13 +1433,15 @@ class Watcher:
 
     def __init__(self):
         self.data = load_json(WATCH_F, {"enabled": False, "channels": [], "seen": {}, "queue": []})
-        for k, v in (("enabled", False), ("channels", []), ("seen", {}), ("queue", [])):
+        for k, v in (("enabled", False), ("channels", []), ("seen", {}), ("queue", []), ("skip", {})):
             self.data.setdefault(k, v)
         self.lock = threading.RLock()
         self.wake = threading.Event()
         self.next_check = 0.0
         self.checking = ""
         self.live_slots = {}       # channel id -> job slot started by the watcher
+        self.vod_from = None       # channel id whose upload is being clipped right now
+        self.data.setdefault("skip", {})   # channel id -> live URL you stopped: not restarted until that live ends
 
     def save(self):
         with self.lock:
@@ -1361,10 +1518,43 @@ class Watcher:
 
     def remove(self, cid):
         with self.lock:
+            gone = next((c for c in self.data["channels"] if c["id"] == cid), None)
             self.data["channels"] = [c for c in self.data["channels"] if c["id"] != cid]
             self.data["seen"].pop(cid, None)
+            self.data["skip"].pop(cid, None)
             self.data["queue"] = [q for q in self.data["queue"] if q.get("ch") != cid]
         self.save()
+        # a removed channel stops being clipped now, not just from the next check
+        self.stop_channel(cid, (gone or {}).get("name", "channel"), "removed")
+
+    def stop_channel(self, cid, name, why):
+        """Stop whatever auto-clip started for this channel: its live recording and its video being clipped.
+        Clips already made are kept."""
+        slot = self.live_slots.pop(cid, None)
+        j = JOBS.get(slot) if slot is not None else None
+        if j and j.state in ("starting", "live"):
+            j.watch_stopped = True
+            j.stop()
+            log(f"[watch] {name} {why} - stopped its live recording (stream {slot})")
+        if self.vod_from == cid and vod.busy():
+            vod.stop()
+            log(f"[watch] {name} {why} - stopped clipping its video")
+        if self.vod_from == cid:
+            self.vod_from = None
+
+    def stopped_by_you(self, job):
+        """You pressed Stop on a stream auto-clip started: don't start that same live again."""
+        if getattr(job, "watch_stopped", False):
+            job.watch_stopped = False
+            return
+        for cid, slot in list(self.live_slots.items()):
+            if JOBS.get(slot) is job:
+                self.live_slots.pop(cid, None)
+                with self.lock:
+                    self.data["skip"][cid] = job.url
+                    name = next((c["name"] for c in self.data["channels"] if c["id"] == cid), "channel")
+                self.save()
+                log(f"[watch] you stopped {name}'s live - auto-clip leaves this live alone until it ends")
 
     def find(self, cid):
         for c in self.data["channels"]:
@@ -1408,6 +1598,8 @@ class Watcher:
         for ch in list(self.data["channels"]):
             if not self.data["enabled"]:
                 break
+            if ch not in self.data["channels"]:
+                continue                          # removed while this round was running
             self.checking = ch["name"]
             for attempt in range(3):           # internet blips: retry quietly before showing an error
                 try:
@@ -1439,6 +1631,8 @@ class Watcher:
             ch["name"] = nick or ch["name"]
             ch["live_now"] = (title or "live") if rid else ""
             ch["status"] = "live" if rid else "offline"
+            if ch["status"] == "offline" and self.data["skip"].pop(ch["id"], None):
+                log(f"[watch] {ch['name']}'s live ended - auto-clip will clip its next live")
             if rid and ch["live"]:
                 self.start_live(ch, f"https://www.tiktok.com/@{ch['key']}/live", title)
             return
@@ -1449,10 +1643,14 @@ class Watcher:
             if sid and ch["live"]:
                 self.start_live(ch, f"https://twitch.tv/{ch['key']}", title)
             ch["status"] = "live" if sid else "offline"
+            if ch["status"] == "offline" and self.data["skip"].pop(ch["id"], None):
+                log(f"[watch] {ch['name']}'s live ended - auto-clip will clip its next live")
             return
         vid, title = E.yt_live_now(ch["channel_id"])
         ch["live_now"] = title or (vid or "")
         ch["status"] = "live" if vid else "offline"
+        if ch["status"] == "offline" and self.data["skip"].pop(ch["id"], None):
+            log(f"[watch] {ch['name']}'s live ended - auto-clip will clip its next live")
         seen = self.data["seen"].setdefault(ch["id"], [])
         if vid:
             if vid not in seen:
@@ -1476,6 +1674,10 @@ class Watcher:
             self.queue_upload(ch, f"https://www.youtube.com/watch?v={v}", t)
 
     def start_live(self, ch, url, title):
+        if not self.data["enabled"] or ch not in self.data["channels"]:
+            return                              # switched off or removed a moment ago
+        if self.data["skip"].get(ch["id"]) == url or (ch["platform"] != "youtube" and self.data["skip"].get(ch["id"])):
+            return                              # you stopped this live: wait until it ends
         for j in JOBS.values():
             if j.state != "idle" and (j.url == url or (ch["platform"] == "twitch" and j.url.endswith("/" + ch["key"]))
                                       or (ch["platform"] == "tiktok" and f"/@{ch['key']}/" in j.url)):
@@ -1524,8 +1726,8 @@ class Watcher:
     def dispatch(self):
         """Start the next queued upload when the clipper is free. Live streams first: wait while one runs."""
         with self.lock:
-            if not self.data["queue"] or vod.busy():
-                return
+            if not self.data["enabled"] or not self.data["queue"] or vod.busy():
+                return                          # auto-clip is off: queued videos wait
             if any(j.state != "idle" for j in JOBS.values()):
                 return
             q = self.data["queue"].pop(0)
@@ -1538,6 +1740,7 @@ class Watcher:
             vod.start(url=q["url"], clips=ch.get("clips", 5), template=ch.get("template", ""),
                       brief=ch.get("brief", ""), genre=ch.get("genre", "auto"), layout=ch.get("layout", "auto"),
                       speech=ch.get("speech", ""))
+            self.vod_from = q["ch"]
             log(f"[watch] clipping {q['name']}: {q['title'][:60]}")
         except RuntimeError as e:
             with self.lock:
@@ -1571,7 +1774,10 @@ def api_watch_set():
     if "enabled" in d:
         watcher.data["enabled"] = bool(d["enabled"])
         watcher.save()
-        log("[watch] auto-clip " + ("ON" if watcher.data["enabled"] else "OFF"))
+        log("[watch] auto-clip " + ("ON" if watcher.data["enabled"] else "OFF - queued videos wait until it's back on"))
+        if not watcher.data["enabled"]:
+            for c in list(watcher.data["channels"]):        # stop the lives and video auto-clip started
+                watcher.stop_channel(c["id"], c["name"], "auto-clip switched off")
         watcher.wake.set()
     return ok(**watcher.info())
 
@@ -1635,11 +1841,12 @@ def api_state():
 @app.get("/api/config")
 def api_config():
     s = dict(settings)
-    for k in ("api_key", "ai_key", "groq_key"):
+    for k in ("api_key", "ai_key", "groq_key", "remote_tunnel_token"):
         s[k] = "••••" + s[k][-4:] if s.get(k) else ""
     s["remote_password"] = "••••••••" if s.get("remote_password") else ""
     if not is_local():
-        for k in ("api_key", "ai_key", "groq_key", "remote_password", "out_dir", "ntfy_topic", "ntfy_server"):
+        for k in ("api_key", "ai_key", "groq_key", "remote_password", "out_dir", "ntfy_topic", "ntfy_server",
+                  "remote_tunnel_token"):
             s.pop(k, None)
     styles = {k: {"label": v["label"], "words": v["words"], "upper": v["upper"], "mode": v["mode"], "anim": v.get("anim", ""), **v["css"],
                   "size": v["size"], "outline": v["outline"], "font": v["font"]}
@@ -1661,7 +1868,7 @@ def api_settings():
             continue
         if not is_local() and (k.startswith("remote_") or k in REMOTE_LOCKED):
             continue
-        if k in ("api_key", "ai_key", "groq_key", "remote_password") and str(v).startswith("••••"):
+        if k in ("api_key", "ai_key", "groq_key", "remote_password", "remote_tunnel_token") and str(v).startswith("••••"):
             continue
         if LITE and ((k == "ai_provider" and v == "ollama") or (k == "enhance_default" and v) or (k == "stt" and v in ("local", "gpu"))):
             continue                                   # light copy: nothing that needs a big local AI install
@@ -1691,6 +1898,53 @@ def api_fonts():
     return ok(fonts=E.custom_fonts(), system=E.SYSTEM_FONTS)
 
 
+_FONT_INDEX = {}
+
+
+def _font_dirs():
+    dirs = [FONTS_DIR]
+    if os.name == "nt":
+        dirs += [os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts"),
+                 os.path.join(os.environ.get("LOCALAPPDATA", ""), "Microsoft", "Windows", "Fonts")]
+    elif sys.platform == "darwin":
+        dirs += ["/Library/Fonts", "/System/Library/Fonts", "/System/Library/Fonts/Supplemental", os.path.expanduser("~/Library/Fonts")]
+    else:
+        dirs += ["/usr/share/fonts", os.path.expanduser("~/.local/share/fonts")]
+    return [d for d in dirs if d and os.path.isdir(d)]
+
+
+def _font_index():
+    """family -> best file (bold if there is one, as the captions are bold), built once."""
+    if _FONT_INDEX:
+        return _FONT_INDEX
+    best = {}
+    for d in _font_dirs():
+        for root, _, files in os.walk(d):
+            for fn in files:
+                if not fn.lower().endswith((".ttf", ".otf")):
+                    continue
+                p = os.path.join(root, fn)
+                fam = E.font_family(p)
+                if not fam:
+                    continue
+                low = fn.lower()
+                score = (2 if d == FONTS_DIR else 0) + (1 if ("bd" in low or "bold" in low or "black" in low) and "italic" not in low and not low.endswith(("i.ttf", "bi.ttf", "z.ttf")) else 0)
+                if fam not in best or score > best[fam][0]:
+                    best[fam] = (score, p)
+    _FONT_INDEX.update({k: v[1] for k, v in best.items()})
+    return _FONT_INDEX
+
+
+@app.get("/api/fonts/file")
+def api_font_file():
+    """A font file by family name, so the phone app can show text in the same font."""
+    fam = (request.args.get("family") or "").strip()
+    p = _font_index().get(fam) or next((v for k, v in _font_index().items() if k.lower() == fam.lower()), None)
+    if not p or not os.path.isfile(p):
+        abort(404)
+    return send_from_directory(os.path.dirname(p), os.path.basename(p), max_age=86400 * 30)
+
+
 @app.post("/api/fonts")
 def api_font_upload():
     f = request.files.get("file")
@@ -1711,6 +1965,7 @@ def api_font_upload():
         os.remove(path)
         return fail("could not read that font")
     log(f"font added: {fam}")
+    _FONT_INDEX.clear()
     return ok(file=fname, family=fam, fonts=E.custom_fonts())
 
 
@@ -1718,6 +1973,7 @@ SOUNDS_DIR = UP["fx"]
 OLD_SOUNDS_DIR = os.path.join(HERE, "sounds")
 E.SOUNDS_DIR = SOUNDS_DIR
 E.SOUND_DIRS = [SOUNDS_DIR, OLD_SOUNDS_DIR]
+E.sound_file = lambda f: sound_file_path(f)
 E.asset_path = asset_path
 E.SFX_CACHE = os.path.join(HERE, "work", "sfx")
 SOUND_EXT = (".mp3", ".wav", ".ogg", ".m4a", ".aac")
@@ -1733,6 +1989,7 @@ def list_sounds():
 
 def sound_file_path(fname):
     fname = os.path.basename(fname or "")
+    fname = _aliases().get(fname, fname)
     for d in (SOUNDS_DIR, OLD_SOUNDS_DIR):
         p = os.path.join(d, fname)
         if fname and os.path.isfile(p):
@@ -1866,7 +2123,9 @@ def api_live_campaign():
 
 @app.post("/api/stop")
 def api_stop():
-    get_job(request.get_json(force=True)).stop()
+    j = get_job(request.get_json(force=True))
+    watcher.stopped_by_you(j)
+    j.stop()
     return ok()
 
 
@@ -2191,16 +2450,27 @@ def api_recaption(name):
     raw = raw_p(name)
     if not m or not os.path.isfile(raw):
         return fail("this clip has no source video")
-    code = (request.get_json(force=True, silent=True) or {}).get("speech") or ""
+    body = request.get_json(force=True, silent=True) or {}
+    code = body.get("speech") or ""
     if code and code not in E.SPEECH:
         return fail("unknown language")
+    # "AI captions" in the editor: the best model, on this PC's graphics card (large-v3) or on Groq
+    src = body.get("source") or ""
+    opts = dict(settings)
+    if src == "groq":
+        opts["stt"] = "groq"
+    elif src == "pc":
+        opts["stt"] = "auto"
+    opts["stt_quality"] = "best" if src in ("pc", "groq") or body.get("best") else "auto"
     t0 = time.time()
-    words = E.transcribe_auto(raw, DIRS["tmp"], settings, log, speech=code or None,
+    log(f"[captions] {name}: AI captions ({'Groq' if src == 'groq' else 'graphics card, large model' if src == 'pc' else 'auto'})")
+    words = E.transcribe_auto(raw, DIRS["tmp"], opts, log, speech=code or None,
                               context=" - ".join(x for x in ((m.get("ctx") or {}).get("channel"), m.get("yt_title")) if x))
     if words is None:
         return fail("captions failed: " + (E.LAST_WHISPER_ERROR[0] or "unknown error"))
-    update_meta(name, words=[list(w) for w in words], transcript=" ".join(w[2] for w in words), speech=code)
-    return ok(words=[list(w) for w in words], seconds=round(time.time() - t0, 1), language=E.LAST_LANG[0])
+    update_meta(name, words=[list(w) for w in words], transcript=" ".join(w[2] for w in words), speech=code,
+                captions_by=E.LAST_STT[0])
+    return ok(words=[list(w) for w in words], seconds=round(time.time() - t0, 1), language=E.LAST_LANG[0], by=E.LAST_STT[0])
 
 
 @app.get("/api/enhance")
@@ -2267,6 +2537,55 @@ def raw_lite(name):
                     os.replace(lite + ".tmp.mp4", lite)
     fn = os.path.basename(lite) if (m.get("enhanced") and os.path.isfile(lite)) else os.path.basename(raw)
     return send_from_directory(DIRS["raw"], fn, conditional=True)
+
+
+PROXY_LOCK = threading.Lock()
+
+
+def make_proxy(name):
+    """A light copy of the clip's source for phone editing: 720p, 30 fps, about 2.5 Mbit/s.
+    Made on the graphics card's video encoder when there is one (about a second), else on the processor."""
+    src, out = raw_p(name), raw_p(name, "proxy")
+    if not os.path.isfile(src):
+        raise RuntimeError("this clip has no source video")
+    with PROXY_LOCK:
+        if os.path.isfile(out) and os.path.getmtime(out) >= os.path.getmtime(src):
+            return out
+        tmp = out + ".tmp.mp4"
+        vf = "scale=-2:'min(720,ih)':flags=bicubic,fps=30"
+        tries = [["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", "28", "-b:v", "2500k", "-maxrate", "4M"],
+                 ["-c:v", "libx264", "-preset", "veryfast", "-crf", "28", "-maxrate", "4M", "-bufsize", "8M"]]
+        for enc in tries:
+            r = E.run(["ffmpeg", "-v", "error", "-y", "-i", src, "-vf", vf, *enc, "-g", "30", "-pix_fmt", "yuv420p",
+                       "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", tmp])
+            if r.returncode == 0 and os.path.isfile(tmp) and os.path.getsize(tmp) > 1000:
+                os.replace(tmp, out)
+                log(f"[proxy] {name}: phone editing copy made ({os.path.getsize(out) / 1e6:.1f} MB)")
+                return out
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise RuntimeError("could not make the phone copy")
+
+
+@app.post("/api/clips/<name>/proxy")
+def api_clip_proxy(name):
+    """Editor: 'Proxy from PC' - make (or reuse) the light editing copy, then the phone downloads it."""
+    name = os.path.basename(name)
+    try:
+        p = make_proxy(name)
+    except Exception as e:  # noqa: BLE001
+        return fail(str(e)[:200])
+    return ok(url=f"/rawproxy/{name}.mp4", size=os.path.getsize(p))
+
+
+@app.get("/rawproxy/<name>.mp4")
+def raw_proxy(name):
+    name = os.path.basename(name)
+    if not os.path.isfile(raw_p(name, "proxy")):
+        return fail("no phone copy yet", 404)
+    return send_from_directory(DIRS["raw"], os.path.basename(raw_p(name, "proxy")), conditional=True)
 
 
 @app.post("/api/enhance/check")
@@ -2392,6 +2711,25 @@ def api_account_lang():
     return ok(langs=ACC.data["langs"])
 
 
+def _same_file(folder, data, ext=None):
+    """An existing file in [folder] with exactly these bytes (so the same picture is never stored twice)."""
+    n = len(data)
+    h = None
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return None
+    for f in names:
+        p = os.path.join(folder, f)
+        if not os.path.isfile(p) or os.path.getsize(p) != n or (ext and os.path.splitext(f)[1].lower() != ext):
+            continue
+        h = h or hashlib.sha1(data).hexdigest()
+        with open(p, "rb") as fh:
+            if hashlib.sha1(fh.read()).hexdigest() == h:
+                return f
+    return None
+
+
 @app.post("/api/assets/image")
 def api_image_upload():
     """Backgrounds, stickers and logos for the clip editor."""
@@ -2404,6 +2742,10 @@ def api_image_upload():
     data = f.read(30 * 1024 * 1024 + 1)
     if len(data) > 30 * 1024 * 1024:
         return fail("that image is over 30 MB")
+    same = _same_file(UP["images"], data) or _same_file(DIRS["assets"], data)
+    if same:
+        w, h = E.probe_size(asset_path(same))
+        return ok(file=same, w=w, h=h, existing=True)
     fname = f"img_{time.strftime('%Y%m%d_%H%M%S')}_{os.urandom(2).hex()}{ext}"
     with open(os.path.join(UP["images"], fname), "wb") as out:
         out.write(data)
@@ -2433,6 +2775,12 @@ def api_uploads_add():
     data = f.read(cap + 1)
     if len(data) > cap:
         return fail(f"that file is over {cap // 1048576} MB")
+    same = _same_file(UP[kind], data) or (_same_file(DIRS["assets"], data) if kind in ("images", "audio") else None)
+    if same:
+        extra = {}
+        if kind == "images":
+            extra["w"], extra["h"] = E.probe_size(asset_path(same))
+        return ok(kind=kind, file=same, existing=True, **extra)
     if kind == "audio":
         fname = "music_" + safe_name(f.filename)
     elif kind == "images":
@@ -2452,14 +2800,42 @@ def api_uploads_add():
     return ok(kind=kind, file=fname, **extra)
 
 
+FILE_DIRS = {**UP, "older": DIRS["assets"]}
+OLDER_EXT = (".png", ".jpg", ".jpeg", ".webp", ".gif", ".mp3", ".wav", ".ogg", ".m4a")
+
+
+def _dupes(d):
+    """Groups of byte-identical files in folder [d]: {kept_name: [copies...]}, keeping the oldest."""
+    by = {}
+    for f in os.listdir(d):
+        p = os.path.join(d, f)
+        if os.path.isfile(p) and f != "aliases.json":
+            by.setdefault(os.path.getsize(p), []).append(f)
+    out = {}
+    for fs in by.values():
+        if len(fs) < 2:
+            continue
+        hs = {}
+        for f in fs:
+            with open(os.path.join(d, f), "rb") as fh:
+                hs.setdefault(hashlib.sha1(fh.read()).hexdigest(), []).append(f)
+        for g in hs.values():
+            if len(g) > 1:
+                g.sort(key=lambda f: os.path.getmtime(os.path.join(d, f)))
+                out[g[0]] = g[1:]
+    return out
+
+
 @app.get("/api/uploads")
 def api_uploads_list():
-    out = {}
-    for k, d in UP.items():
+    out, dup = {}, 0
+    for k, d in FILE_DIRS.items():
         fs = [(os.path.getmtime(os.path.join(d, f)), f, os.path.getsize(os.path.join(d, f))) for f in os.listdir(d)
-              if os.path.isfile(os.path.join(d, f))]
-        out[k] = [{"file": f, "size": sz, "time": int(t)} for t, f, sz in sorted(fs, reverse=True)]
-    return ok(folders=out, path=UPLOADS)
+              if os.path.isfile(os.path.join(d, f)) and f != "aliases.json" and (k != "older" or os.path.splitext(f)[1].lower() in OLDER_EXT)]
+        copies = {c for cs in _dupes(d).values() for c in cs}
+        dup += len(copies & {f for _, f, _ in fs})
+        out[k] = [{"file": f, "size": sz, "time": int(t), "dupe": f in copies} for t, f, sz in sorted(fs, reverse=True)]
+    return ok(folders=out, path=UPLOADS, dupes=dup)
 
 
 @app.get("/uploads/<kind>/<path:fname>")
@@ -2471,11 +2847,88 @@ def upload_file(kind, fname):
 
 @app.post("/api/uploads/delete")
 def api_uploads_delete():
+    """Delete one or more uploaded files: {kind, file} or {files: [{kind, file}, ...]}."""
     d = request.get_json(force=True) or {}
-    k, fname = d.get("kind"), os.path.basename(d.get("file") or "")
-    if k in UP and fname and os.path.isfile(os.path.join(UP[k], fname)):
-        os.remove(os.path.join(UP[k], fname))
+    items = d.get("files") or [{"kind": d.get("kind"), "file": d.get("file")}]
+    gone = 0
+    for it in items[:500]:
+        k, fname = (it or {}).get("kind"), os.path.basename((it or {}).get("file") or "")
+        if k in FILE_DIRS and fname and fname != "aliases.json" and os.path.isfile(os.path.join(FILE_DIRS[k], fname)):
+            if k == "older" and os.path.splitext(fname)[1].lower() not in OLDER_EXT:
+                continue
+            os.remove(os.path.join(FILE_DIRS[k], fname))
+            gone += 1
+    if gone:
+        log(f"[upload] deleted {gone} file(s)")
     return api_uploads_list()
+
+
+@app.post("/api/uploads/dedupe")
+def api_uploads_dedupe():
+    """Remove byte-identical copies, keeping the oldest. Clips that used a removed copy still find the kept one."""
+    al, n = _aliases(), 0
+    for k, d in FILE_DIRS.items():
+        for keep, copies in _dupes(d).items():
+            for c in copies:
+                if k == "older" and os.path.splitext(c)[1].lower() not in OLDER_EXT:
+                    continue
+                os.remove(os.path.join(d, c))
+                al[c] = keep
+                n += 1
+    for k, v in list(al.items()):          # follow chains so every name points at a file that exists
+        while v in al and al[v] != v:
+            v = al[v]
+        al[k] = v
+    with open(ALIASES_F, "w", encoding="utf-8") as fh:
+        json.dump(al, fh)
+    log(f"[upload] removed {n} duplicate file(s)")
+    r = api_uploads_list().get_json()
+    r["removed"] = n
+    return jsonify(r)
+
+
+_YT_ID = re.compile(r"(?:v=|youtu\.be/|/shorts/|/live/|/embed/|/v/)([A-Za-z0-9_-]{11})")
+
+
+@app.post("/api/uploads/ytthumb")
+def api_yt_thumb():
+    """Save a YouTube video's thumbnail at the best size YouTube has (usually 1280x720) into uploads\\images."""
+    url = str((request.get_json(force=True) or {}).get("url") or "").strip()
+    m = _YT_ID.search(url) or (re.fullmatch(r"[A-Za-z0-9_-]{11}", url) and re.match(r"(.*)", url))
+    if not m:
+        return fail("paste a YouTube video link")
+    vid = m.group(1)
+    fname = f"img_yt_{vid}.jpg"
+    p = os.path.join(UP["images"], fname)
+    if not os.path.isfile(p):
+        cands = []
+        try:  # yt-dlp knows every size YouTube keeps; take the biggest
+            import yt_dlp
+            with yt_dlp.YoutubeDL({"quiet": True, "skip_download": True, "no_warnings": True}) as y:
+                info = y.extract_info(f"https://www.youtube.com/watch?v={vid}", download=False, process=False)
+            ts = [t for t in (info.get("thumbnails") or []) if t.get("url") and ".jpg" in t["url"].split("?")[0]]
+            ts.sort(key=lambda t: -((t.get("width") or 0) * (t.get("height") or 0) or t.get("preference") or 0))
+            cands = [t["url"] for t in ts[:3]]
+        except Exception:
+            pass
+        cands += [f"https://i.ytimg.com/vi/{vid}/{n}.jpg" for n in ("maxresdefault", "sddefault", "hqdefault")]
+        data = None
+        for u in cands:
+            try:
+                with urllib.request.urlopen(urllib.request.Request(u, headers={"User-Agent": "Mozilla/5.0"}), timeout=15) as r:
+                    b = r.read(15 * 1024 * 1024)
+                if len(b) > 3000:  # YouTube's grey placeholder is ~1 KB
+                    data = b
+                    break
+            except Exception:
+                continue
+        if not data:
+            return fail("couldn't get that video's thumbnail")
+        with open(p, "wb") as out:
+            out.write(data)
+        log(f"[upload] YouTube thumbnail {vid}")
+    w, h = E.probe_size(p)
+    return ok(kind="images", file=fname, w=w, h=h)
 
 
 @app.get("/api/assets/images")
@@ -2544,17 +2997,36 @@ def api_save_meta(name):
     return ok()
 
 
+def _is_posted(m):
+    return any((v or {}).get("status") == "posted" for v in (m.get("posts") or {}).values())
+
+
 @app.delete("/api/clips/<name>")
 def api_delete(name):
-    for p in [os.path.join(out_dir(), name + ".mp4"), os.path.join(out_dir(), name + ".txt"),
-              os.path.join(DIRS["raw"], name + ".mp4"), os.path.join(DIRS["thumbs"], name + ".jpg"),
-              raw_p(name, "orig"), raw_p(name, "lite"), meta_path(name)] + [os.path.join(d, f) for d in (DIRS["enh"], DIRS["thumbs"])
-                                  for f in os.listdir(d) if f.startswith(name + "__")]:
+    """Delete a clip from the PC. A clip that was posted keeps its thumbnail and post links (so its views can still be
+    tracked in Posted); deleting it again from Posted, or with ?full=1, removes everything."""
+    name = os.path.basename(name)
+    m = read_meta(name) or {}
+    keep = _is_posted(m) and not m.get("archived") and request.args.get("full") != "1"
+    files = [os.path.join(out_dir(), name + ".mp4"), os.path.join(out_dir(), name + ".txt"),
+             os.path.join(DIRS["raw"], name + ".mp4"), raw_p(name, "orig"), raw_p(name, "lite"), raw_p(name, "proxy")]
+    files += [os.path.join(d, f) for d in (DIRS["enh"], DIRS["thumbs"], DIRS["raw"]) for f in os.listdir(d) if f.startswith(name + "__")]
+    if not keep:
+        files += [os.path.join(DIRS["thumbs"], name + ".jpg"), meta_path(name)]
+    freed = 0
+    for p in files:
         try:
+            sz = os.path.getsize(p)
             os.remove(p)
+            freed += sz
         except OSError:
             pass
-    return ok()
+    if keep:
+        update_meta(name, archived=True, archived_at=time.time(), status="done")
+        log(f"[clips] {name}: video deleted ({freed / 1e6:.0f} MB), kept in Posted for views")
+    else:
+        log(f"[clips] {name}: deleted completely")
+    return ok(archived=keep, freed=freed)
 
 
 @app.get("/media/<path:fname>")
@@ -2630,10 +3102,11 @@ def enhance_job(name, quality, sharpen=None):
         sharpen = sharpen if sharpen in SHARPEN else (settings.get("enhance_sharpen") or "medium")
         job.update(pct=99, step="sharpening" if SHARPEN.get(sharpen) else "finishing", state="finishing")
         finish_enhanced(up, prep, new, sharpen)
-        try:
-            os.remove(raw_p(name, "lite"))           # the phone preview copy is remade from the new video when needed
-        except OSError:
-            pass
+        for kind in ("lite", "proxy"):              # phone copies are remade from the new video when needed
+            try:
+                os.remove(raw_p(name, kind))
+            except OSError:
+                pass
         for attempt in range(120):                     # the editor preview may hold the old file for a moment
             try:
                 os.replace(new, raw)
@@ -3030,7 +3503,7 @@ def api_restart():
 @app.post("/api/open")
 def api_open():
     what = (request.get_json(force=True) or {}).get("what", "out")
-    path = out_dir() if what == "out" else DIRS["rec"]
+    path = out_dir() if what == "out" else UPLOADS if what == "uploads" else DIRS["rec"]
     if os.name == "nt":
         os.startfile(path)  # noqa: S606
     elif IS_MAC:
@@ -3190,7 +3663,7 @@ def storage_groups():
     return {
         "tmp": ("Temporary files", "safe - leftovers from making clips", _files(DIRS["tmp"]) + _files(DIRS["enh"])),
         "lite": ("Phone preview copies", "safe - made again when you open the clip on your phone",
-                 _files(DIRS["raw"], lambda f: f.endswith(".lite.mp4"))),
+                 _files(DIRS["raw"], lambda f: f.endswith((".lite.mp4", ".proxy.mp4")))),
         "orig": ("Originals of AI-enhanced clips", "you can no longer undo the enhancement",
                  [] if any(j.get("state") not in ("done", "error") for j in ENH.values()) else
                  _files(DIRS["raw"], lambda f: f.endswith(".orig.mp4"))),
@@ -3276,6 +3749,21 @@ def api_campaigns():
 def api_disk():
     du = shutil.disk_usage(WORK)
     return ok(free=du.free, total=du.total)
+
+
+@app.get("/api/clips/<name>/posts")
+def api_clip_posts(name):
+    """Where this clip is being posted and how far each one has got (the app's posting progress)."""
+    m = read_meta(os.path.basename(name))
+    if not m:
+        return fail("clip not found")
+    return ok(posts=m.get("posts") or {})
+
+
+@app.get("/api/clips/<name>/stats")
+def api_clip_stats(name):
+    """Views, likes and comments of a posted clip on each platform."""
+    return ok(stats=post_stats(name, refresh=request.args.get("refresh") == "1"))
 
 
 @app.post("/api/clips/<name>/unschedule")

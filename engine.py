@@ -814,6 +814,7 @@ SPEECH = {   # what the streamer speaks -> (Whisper language, caption script)
 }
 GPU_STT = None          # set by Chipper: f(audio_path, lang, prompt) -> (words, detected) or (None, error)
 LAST_LANG = [""]
+LAST_STT = [""]          # which engine/model made the last captions, e.g. "graphics card (turbo)"
 
 
 def speech_code(settings, override=None):
@@ -919,28 +920,35 @@ def transcribe_auto(clip, work_dir, settings, log=print, speech=None, context=""
     groq_key = settings.get("ai_key") if settings.get("ai_provider") == "groq" else settings.get("groq_key", "")
     groq_key = groq_key or settings.get("groq_key", "")
     hint = {"hi": "नमस्ते दोस्तों, आज हम गेम खेल रहे हैं। भाई ये क्या हुआ!", "ne": "नमस्ते साथीहरू, आज हामी गेम खेल्दैछौं। ए साथी यो के भयो!"}.get(lang)
-    words, LAST_LANG[0] = None, ""
-    if given and len(given.get("words") or []) >= 3:       # YouTube's own captions for this part of the video
-        words, LAST_LANG[0] = list(given["words"]), given.get("lang") or ""
+    words, LAST_LANG[0], LAST_STT[0] = None, "", ""
+    # every new clip uses a light, fast model; "AI captions" in the editor asks for the best (stt_quality=best)
+    best = settings.get("stt_quality") == "best"
+    gpu_model = "large-v3" if best else (settings.get("stt_auto_model") or "turbo")
+    if given and len(given.get("words") or []) >= 3 and not best:       # YouTube's own captions for this part of the video
+        words, LAST_LANG[0], LAST_STT[0] = list(given["words"]), given.get("lang") or "", "YouTube"
     if words is None and engine in ("auto", "gpu") and GPU_STT:
         wav = os.path.join(work_dir, os.path.splitext(os.path.basename(clip))[0] + "_stt.wav")
         if run(["ffmpeg", "-v", "error", "-y", "-i", clip, "-vn", "-ac", "1", "-ar", "16000", wav]).returncode == 0:
-            words, det = GPU_STT(os.path.abspath(wav), lang, hint)
+            words, det = GPU_STT(os.path.abspath(wav), lang, hint, gpu_model)
             if words is None:
                 log(f"GPU captions not used ({det})")
             else:
-                LAST_LANG[0] = det or lang or ""
+                LAST_LANG[0], LAST_STT[0] = det or lang or "", f"graphics card ({gpu_model})"
             try:
                 os.remove(wav)
             except OSError:
                 pass
     if words is None and engine in ("auto", "gpu", "groq") and groq_key:
-        words = transcribe_groq(clip, work_dir, groq_key, lang, model="whisper-large-v3" if lang != "en" else
-                                "whisper-large-v3-turbo")
+        gm = "whisper-large-v3" if (lang != "en" or best) else "whisper-large-v3-turbo"
+        words = transcribe_groq(clip, work_dir, groq_key, lang, model=gm)
+        if words is not None:
+            LAST_STT[0] = f"Groq ({gm})"
         if words is None and engine == "groq":
             return None
     if words is None and engine in ("auto", "local"):
         words = transcribe(clip, work_dir, settings.get("model", "base"), lang)
+        if words is not None:
+            LAST_STT[0] = f"processor ({settings.get('model', 'base')})"
     if words is None and engine == "groq" and not groq_key:
         LAST_WHISPER_ERROR[0] = "Groq captions need a Groq API key in Settings"
     if not words:
@@ -1849,8 +1857,8 @@ def clean_scene(sc):
     """Validate a scene coming from the browser (numbers clamped, files reduced to plain names)."""
     sc = sc if isinstance(sc, dict) else {}
     bg = sc.get("bg") if isinstance(sc.get("bg"), dict) else {}
-    out = {"v": 1, "bg": {"type": bg.get("type") if bg.get("type") in ("blur", "color", "gradient", "image") else "blur",
-                          "color": _col(bg.get("color"), "#111318"), "color2": _col(bg.get("color2"), "#3a1c71"),
+    out = {"v": 1, "bg": {"type": bg.get("type") if bg.get("type") in ("blur", "color", "gradient", "image") else "color",
+                          "color": _col(bg.get("color"), "#000000"), "color2": _col(bg.get("color2"), "#3a1c71"),
                           "image": os.path.basename(str(bg.get("image") or ""))[:120],
                           "dim": _num(bg.get("dim"), 0.25, 0, 0.9), "blur": _num(bg.get("blur"), 14, 0, 40)}}
     pb = sc.get("progress") if isinstance(sc.get("progress"), dict) else {}
@@ -2745,6 +2753,7 @@ SFX_LABELS = {"boom": "Boom", "explosion": "Explosion", "airhorn": "Air horn", "
               "rimshot": "Ba dum tss", "slide": "Slide whistle", "ooh": "Crowd ooh"}
 SOUNDS_DIR = ""          # user's own sound files (set by app.py)
 SOUND_DIRS = []          # every folder sound effects may be in (set by app.py)
+sound_file = None        # app.py's lookup (follows removed duplicates to the kept copy)
 asset_path = None        # finds an editor file in the uploads folders (set by app.py)
 
 
@@ -2774,6 +2783,8 @@ def make_sfx(name, out_dir):
 def sound_path(sound, sfx_dir):
     sfx_dir = SFX_CACHE or sfx_dir
     if sound.startswith("file:"):
+        if sound_file:
+            return sound_file(sound[5:])
         for d in (SOUND_DIRS or [SOUNDS_DIR]):
             p = os.path.join(d, os.path.basename(sound[5:])) if d else ""
             if p and os.path.isfile(p):
@@ -3060,7 +3071,7 @@ Return ONLY JSON: {{"clips": [{{"start": seconds, "end": seconds, "score": 1-10,
 
 
 def layout_scene(mode, template=None):
-    """Ready-made scenes for non-stream videos: 'fit' = whole video on a blurred background, 'fill' = centre crop."""
+    """Ready-made scenes for non-stream videos: 'fit' = whole video on a solid background, 'fill' = centre crop."""
     if mode == "fill":
         vid = {"kind": "video", "id": "v1", "name": "Video", "role": "custom", "crop": [0.34, 0, 0.32, 1],
                "x": 0, "y": 0, "w": 1080, "h": 1920, "shape": "rect", "radius": 0.12, "border": 0, "bcolor": "#ffffff"}
@@ -3070,7 +3081,8 @@ def layout_scene(mode, template=None):
                "x": 0, "y": 656, "w": 1080, "h": 608, "shape": "rect", "radius": 0.12, "border": 0, "bcolor": "#ffffff"}
         cap_y, hook_y = 1420, 470
     style = (merged_template(template) or {}).get("caption_style", "tiktok") if template else "tiktok"
-    return {"v": 1, "bg": {"type": "blur", "color": "#111318", "color2": "#3a1c71", "image": "", "dim": 0.35, "blur": 16},
+    # solid black behind the video by default (lighter to render and to preview); blur is one tap away in the editor
+    return {"v": 1, "bg": {"type": "color", "color": "#000000", "color2": "#3a1c71", "image": "", "dim": 0.35, "blur": 16},
             "progress": {"on": False, "color": "#ffd93d", "pos": "bottom", "h": 12},
             "layers": [vid, {"kind": "captions", "id": "cap", "name": "Captions", "x": 540, "y": cap_y, "scale": 1.0,
                              "style": style, "color": "", "hi": "", "words": 0, "font": ""},

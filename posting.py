@@ -223,6 +223,17 @@ class YouTube:
         self.acc.save()
         return ch["access_token"]
 
+    def stats(self, vid, channel_id=None):
+        """Views, likes and comments of a posted video (any connected channel can read them)."""
+        chans = self.d.get("channels", [])
+        if not chans:
+            raise PostError("YouTube is not connected")
+        ch = next((c for c in chans if c["id"] == channel_id), chans[0])
+        _, _, j = http("GET", f"{YT_API}/videos?part=statistics&id={urllib.parse.quote(vid)}",
+                       headers={"Authorization": f"Bearer {self._token(ch)}"}, timeout=20, retries=1)
+        st = ((j.get("items") or [{}])[0]).get("statistics") or {}
+        return {"views": int(st.get("viewCount", 0)), "likes": int(st.get("likeCount", 0)), "comments": int(st.get("commentCount", 0))}
+
     def upload(self, video, title, description, tags, privacy="public", progress=lambda s: None, channel_id=None,
                cover=None):
         ch = self.channel(channel_id)
@@ -351,6 +362,26 @@ class Instagram:
     # app.py sets this to a function(video_path) -> public https link (or "" when no remote link is running)
     public_link = None
 
+    def stats(self, mid, account_id=None):
+        """Views (plays), likes and comments of a posted reel."""
+        accs = self.d.get("accounts", [])
+        if not accs:
+            raise PostError("Instagram is not connected")
+        tok = next((a for a in accs if a["id"] == account_id), accs[0])["token"]
+        q = urllib.parse.urlencode({"fields": "like_count,comments_count", "access_token": tok})
+        base = http("GET", f"{FB_GRAPH}/{mid}?{q}", timeout=20, retries=1)[2]
+        views = 0
+        for metric in ("views", "plays", "ig_reels_aggregated_all_plays_count"):
+            try:
+                q = urllib.parse.urlencode({"metric": metric, "access_token": tok})
+                d = http("GET", f"{FB_GRAPH}/{mid}/insights?{q}", timeout=20, retries=1)[2].get("data") or []
+                if d:
+                    views = int(((d[0].get("values") or [{}])[0]).get("value") or d[0].get("total_value", {}).get("value") or 0)
+                    break
+            except PostError:
+                continue
+        return {"views": views, "likes": int(base.get("like_count", 0)), "comments": int(base.get("comments_count", 0))}
+
     def upload(self, video, caption, progress=lambda s: None, account_id=None, cover=None, thumb_ms=None):
         """Try the direct upload first. If Meta's upload server rejects it (ProcessingFailedError), switch to
         letting Instagram download the clip from Chipper's remote link, which avoids that server entirely."""
@@ -473,6 +504,28 @@ class Facebook:
     def remove(self, page_id=None):
         self.d["pages"] = [p for p in self.d.get("pages", []) if page_id and p["id"] != page_id]
         self.acc.save()
+
+    def stats(self, vid, page_id=None):
+        """Plays and likes of a posted reel."""
+        p = self.page(page_id)
+        tok = p["token"]
+        views = 0
+        for metric in ("blue_reels_play_count", "fb_reels_total_plays", "total_video_views"):
+            try:
+                q = urllib.parse.urlencode({"metric": metric, "access_token": tok})
+                d = http("GET", f"{FB_GRAPH}/{vid}/video_insights?{q}", timeout=20, retries=1)[2].get("data") or []
+                if d:
+                    views = int(((d[0].get("values") or [{}])[0]).get("value") or 0)
+                    break
+            except PostError:
+                continue
+        likes = 0
+        try:
+            q = urllib.parse.urlencode({"fields": "likes.summary(true)", "access_token": tok})
+            likes = int(((http("GET", f"{FB_GRAPH}/{vid}?{q}", timeout=20, retries=1)[2].get("likes") or {}).get("summary") or {}).get("total_count", 0))
+        except PostError:
+            pass
+        return {"views": views, "likes": likes}
 
     def upload(self, video, description, progress=lambda s: None, page_id=None, cover=None):
         p = self.page(page_id)

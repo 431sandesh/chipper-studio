@@ -357,6 +357,13 @@ a.btn{text-decoration:none;display:inline-block}
 .stobar{height:10px;border-radius:6px;background:var(--panel2);overflow:hidden}.stobar div{height:100%;background:linear-gradient(90deg,var(--acc2),#ff5c7a)}
 .storow{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line)}.storow b{min-width:72px;text-align:right}
 .storow .mut{font-size:12px}
+.upgrp{margin-top:6px}.upgrp summary{cursor:pointer;padding:7px 0;font-weight:600;border-bottom:1px solid var(--line)}
+.upgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:8px;padding:8px 0}
+.upit{position:relative;display:block;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel2);cursor:pointer}
+.upit img{width:100%;aspect-ratio:1;object-fit:cover;display:block}.upit .nm{font-size:11px;padding:4px 6px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.upit .ic{aspect-ratio:1;display:flex;align-items:center;justify-content:center;font-size:28px}
+.upit input{position:absolute;top:6px;left:6px;width:18px;height:18px}.upit:has(input:checked){outline:2px solid #ff5c7a}
+.upit .dup{position:absolute;top:6px;right:6px;background:#ff5c7a;color:#fff;font-size:10px;font-weight:700;border-radius:6px;padding:1px 5px}
 .presets > .mut{grid-column:1/-1}
 .presets.frames button canvas{width:54px;height:96px}
 .wordpick{display:flex;flex-wrap:wrap;gap:4px;max-height:180px;overflow:auto;margin-top:6px}
@@ -917,7 +924,7 @@ Clip the funniest moments from the podcast. 15-45 seconds. Must include #brandna
       <span class="mut">Length</span><select id="vodLen"><option value="">Auto / from brief</option><option value="10-20">10-20 s</option><option value="15-30">15-30 s</option>
         <option value="30-60">30-60 s</option><option value="45-90">45-90 s</option></select>
       <span class="mut">Layout</span><select id="vodLayout"><option value="auto">Auto</option><option value="template">My template (facecam + game)</option>
-        <option value="fit">Whole video on blurred background</option><option value="fill">Fill screen (centre crop)</option></select>
+        <option value="fit">Whole video (solid background)</option><option value="fill">Fill screen (centre crop)</option></select>
       <span class="mut">Spoken</span><select id="vodSpeech"><option value="">Default (Settings)</option><option value="auto">Auto-detect</option><option value="en">English</option><option value="hi">Hindi, हिंदी captions</option><option value="hi-rom">Hindi, Hinglish (Roman) captions</option><option value="ne">Nepali, नेपाली captions</option><option value="ne-rom">Nepali, Roman captions</option></select>
       <span class="mut">Template</span><select id="vodTpl"></select>
       <button class="btn pri" id="vodGo"><svg class="i" aria-hidden="true"><use href="#i-scissors"/></svg>Find the best moments</button>
@@ -1037,7 +1044,7 @@ Clip the funniest moments from the podcast. 15-45 seconds. Must include #brandna
 <section id="clips">
   <div class="phead"><div><h1>My clips</h1><p>Everything Chipper made, newest first. Edit, rate, post or schedule from here.</p></div></div>
   <div class="row" style="margin-bottom:14px">
-    <h3 style="margin:0">Clips</h3>
+    <div class="seg" id="clipSeg"><button class="on" data-v="all">Clips</button><button data-v="posted">Posted</button></div>
     <button class="btn sm" id="openOut"><svg class="i" aria-hidden="true"><use href="#i-folder"/></svg>Open clips folder</button>
     <span class="mut" id="outPath"></span>
   </div>
@@ -1102,8 +1109,11 @@ Clip the funniest moments from the podcast. 15-45 seconds. Must include #brandna
     <div class="set">
       <div><label class="f"><input type="checkbox" id="s_captions"> Burn captions into clips</label></div>
       <div><label class="f">Captions made by</label><select id="s_stt" style="width:100%">
-        <option value="auto">Best available: graphics card → Groq → laptop (recommended)</option><option value="gpu">Graphics card only (Whisper large-v3)</option><option value="local">This laptop's processor only (Whisper)</option>
+        <option value="auto">Best available: graphics card → Groq → laptop (recommended)</option><option value="gpu">Graphics card only (Whisper)</option><option value="local">This laptop's processor only (Whisper)</option>
         <option value="groq">Groq cloud only (free, fast)</option></select></div>
+      <div><label class="f">Graphics card model for every new clip</label><select id="s_stt_auto_model" style="width:100%">
+        <option value="turbo">turbo: fast and good (recommended)</option><option value="small">small: lightest, less accurate</option><option value="medium">medium: slower</option><option value="large-v3">large-v3: best, heaviest</option></select>
+        <div class="hint">Every clip gets quick captions with this. For the clips you keep, press <b>AI captions</b> in the editor to redo them with the best model (large-v3 on this PC, or Groq).</div></div>
       <div><label class="f">Speech model on this laptop</label><select id="s_model" style="width:100%"><option value="tiny">tiny, fastest</option><option value="base">base, balanced</option><option value="small">small, more accurate</option><option value="medium">medium, best, slow</option></select></div>
       <div><label class="f">What the streamers speak (default)</label><select id="s_speech" style="width:100%"><option value="">Same as before (old setting)</option><option value="auto">Auto-detect</option><option value="en">English</option><option value="hi">Hindi, हिंदी captions</option><option value="hi-rom">Hindi, Hinglish (Roman) captions</option><option value="ne">Nepali, नेपाली captions</option><option value="ne-rom">Nepali, Roman captions</option></select>
         <div class="hint">Set it per stream, per watched channel and per video too. Wrong language = bad captions, so pick Hindi or Nepali for those streamers.</div></div>
@@ -1174,10 +1184,18 @@ Clip the funniest moments from the podcast. 15-45 seconds. Must include #brandna
       <div><label class="f">Remote password (6+ characters)</label><input id="s_remote_password" type="password" style="width:100%"></div>
       <div><label class="f"><input type="checkbox" id="s_remote_auto"> Start remote access when Chipper opens</label></div>
     </div>
+    <details style="margin-top:10px"><summary style="cursor:pointer;font-weight:600">Permanent link on your own domain (optional)</summary>
+      <div class="mut" style="margin:6px 0">With a Cloudflare tunnel, the link stays the same forever (for example studio.yourdomain.com) instead of changing on every restart. Leave empty to use the free changing link.</div>
+      <div class="set">
+        <div><label class="f">Address</label><input id="s_remote_tunnel_host" style="width:100%" placeholder="studio.yourdomain.com"></div>
+        <div><label class="f">Tunnel token (from the Cloudflare dashboard)</label><input id="s_remote_tunnel_token" type="password" style="width:100%" placeholder="eyJ…" autocomplete="off"></div>
+      </div>
+      <div class="hint">The token stays on this computer only. Press Save, then Turn off and Turn on.</div>
+    </details>
     <div class="row" style="margin-top:12px"><button class="btn" id="remSave">Save</button><button class="btn pri" id="remOn">Turn on</button><button class="btn" id="remOff">Turn off</button>
       <span id="remStat" class="mut"></span></div>
     <div id="remLink" style="margin-top:10px"></div>
-    <div class="hint">The link changes every time it's turned on. It's also saved as “Chipper remote link.txt” in your clips folder.</div>
+    <div class="hint">Without a permanent link (below), the link changes every time it's turned on. It's also saved as “Chipper remote link.txt” in your clips folder.</div>
     <h3 style="margin-top:22px"><svg class="i" aria-hidden="true"><use href="#i-share"/></svg>Phone notifications (free)</h3>
     <div class="mut">Get the remote link on your phone every time Chipper starts, and a ping when each clip is ready (tap it to open the clip).</div>
     <ol class="hint" style="margin:8px 0 0 18px;padding:0;line-height:1.7">
@@ -1240,6 +1258,14 @@ Clip the funniest moments from the podcast. 15-45 seconds. Must include #brandna
       <div><label class="f"><input type="checkbox" id="s_keep_recordings"> Keep full recordings (2, 3 GB / hour)</label><div class="hint">Off = recordings are deleted a few minutes after a stream ends.</div></div>
     </div>
     <div class="row savebar"><button class="btn pri saveSet">Save</button><button class="btn" id="openRec"><svg class="i" aria-hidden="true"><use href="#i-folder"/></svg>Open recordings folder</button><button class="btn" id="openOut2"><svg class="i" aria-hidden="true"><use href="#i-folder"/></svg>Open clips folder</button></div>
+  </div>
+  <div class="card sp" data-p="files">
+    <h3 style="margin:0 0 4px">Uploaded files</h3>
+    <div class="mut" style="margin-bottom:8px">Pictures, music, sounds and other files uploaded from the phone or this page. Tick files to delete them. <span id="upDup"></span></div>
+    <div id="upList"></div>
+    <div class="row" style="margin-top:10px"><button class="btn pri" id="upDel"><svg class="i" aria-hidden="true"><use href="#i-trash"/></svg>Delete selected</button>
+      <button class="btn" id="upDedupe"><svg class="i" aria-hidden="true"><use href="#i-copy"/></svg>Remove duplicates</button>
+      <button class="btn" id="upOpen"><svg class="i" aria-hidden="true"><use href="#i-folder"/></svg>Open uploads folder</button></div>
   </div>
 </section>
 </main>
@@ -1775,7 +1801,7 @@ setTimeout(() => api('/api/campaigns').then(j => { if (j.ok) { CAMPS = j; $('#nC
 let CFG = {settings: {}, templates: {}, styles: {}, defaults: {}};
 let T = null;            // template being edited
 let SAVED_LAYOUTS = [];
-const LAY_BASE = [['auto', 'Auto'], ['template', 'My template (facecam + game)'], ['fit', 'Whole video on blurred background'], ['fill', 'Fill screen (centre crop)']];
+const LAY_BASE = [['auto', 'Auto'], ['template', 'My template (facecam + game)'], ['fit', 'Whole video (solid background)'], ['fill', 'Fill screen (centre crop)']];
 function layoutOpts(v) {
   return LAY_BASE.concat(SAVED_LAYOUTS.map(l => ['saved:' + l.name, '⭐ ' + l.name]))
     .map(([k, t]) => `<option value="${esc(k)}" ${k === (v || 'auto') ? 'selected' : ''}>${esc(t)}</option>`).join('');
@@ -1854,7 +1880,7 @@ Clip the funniest reactions. 15-45 seconds. Must include #brand #ad and tag @bra
         <span class="mut">Length</span><select class="cl"><option value="">From brief / auto</option><option value="10-20">10-20 s</option><option value="15-30">15-30 s</option>
           <option value="30-60">30-60 s</option><option value="45-90">45-90 s</option></select>
         <span class="mut">Layout</span><select class="cy"><option value="auto">Auto</option><option value="template">My template (facecam + game)</option>
-          <option value="fit">Whole video on blurred background</option><option value="fill">Fill screen (centre crop)</option></select>
+          <option value="fit">Whole video (solid background)</option><option value="fill">Fill screen (centre crop)</option></select>
         <button class="btn sm cup" style="display:none">✔ Update campaign now</button>
       </div>
       <div class="hint">Every clip from this stream follows it: clip length, required #hashtags and @tags, call to action, what to clip and what to avoid. Leave empty to use the campaign brief from Settings. You can change it while the stream is running.</div>
@@ -2101,14 +2127,30 @@ $('#delTpl').onclick = async () => {
 
 /* ---------- clips ---------- */
 let CLIPS = [], clipsSig = '';
+let CLIP_VIEW = 'all';
+const isPosted = c => Object.values(c.posts || {}).some(v => v && v.status === 'posted');
+const clipViews = c => { let n = null; Object.values(c.posts || {}).forEach(v => { const x = v && v.stats && v.stats.views; if (typeof x === 'number') n = (n || 0) + x; }); return n; };
+$$('#clipSeg button').forEach(b => b.onclick = () => { $$('#clipSeg button').forEach(x => x.classList.toggle('on', x === b)); CLIP_VIEW = b.dataset.v; clipsSig = ''; loadClips(); });
 async function loadClips() {
   const j = await fetch('/api/clips').then(r => r.json()).catch(() => null); if (!j) return;
   CLIPS = j.clips; $('#nclips').textContent = CLIPS.length || '';
-  const sig = JSON.stringify(CLIPS.map(c => [c.name, c.status, c.hook, c.rendered, c.posts, c.score, c.rating, c.avoid]));
+  const sig = CLIP_VIEW + JSON.stringify(CLIPS.map(c => [c.name, c.status, c.hook, c.rendered, c.posts, c.score, c.rating, c.avoid, c.archived]));
   if (MC && $('#modal').classList.contains('on')) { const cur = CLIPS.find(x => x.name === MC.name); if (cur) { MC = cur; drawPostStat(); } }
   if (sig === clipsSig) return; clipsSig = sig;
-  if (!CLIPS.length) { $('#clipGrid').innerHTML = '<div class="empty">No clips yet. Start a stream on the Live tab: clips appear here automatically when chat spikes, or press “Clip now”.</div>'; return; }
-  $('#clipGrid').innerHTML = CLIPS.map(c => {
+  const posted = CLIP_VIEW === 'posted';
+  const list = CLIPS.filter(c => posted ? isPosted(c) : !c.archived);
+  if (!list.length) { $('#clipGrid').innerHTML = posted ? '<div class="empty">Nothing posted yet. Clips you post show here with their views, even after you delete the video.</div>'
+    : '<div class="empty">No clips yet. Start a stream on the Live tab: clips appear here automatically when chat spikes, or press “Clip now”.</div>'; return; }
+  $('#clipGrid').innerHTML = list.map(c => {
+    if (c.archived) {
+      const v = clipViews(c);
+      return `<div class="clip" data-n="${esc(c.name)}">
+      <div class="th" style="background-image:url('/thumb/${encodeURIComponent(c.name)}.jpg')"><span class="badge st-other">video deleted</span></div>
+      <div class="bd"><div class="hook">${esc(c.hook || '')}</div>
+      <div class="mut" style="font-size:12px">${v != null ? `<b>${v.toLocaleString()}</b> views · ` : ''}posted ${new Date(c.created * 1000).toLocaleDateString()}</div>
+      ${postBadges(c)}
+      <div class="acts"><button class="btn sm" data-act="del" title="Delete completely"><svg class="i" aria-hidden="true"><use href="#i-trash"/></svg>Delete completely</button></div></div></div>`;
+    }
     const done = c.status === 'done', cls = done ? 'st-done' : c.status === 'error' ? 'st-error' : 'st-other';
     const when = new Date(c.created * 1000).toLocaleTimeString([], {hour: '2-digit', minute: '2-digit'});
     const th = done ? `background-image:url('/thumb/${encodeURIComponent(c.name)}.jpg?${c.rendered}')` : '';
@@ -2133,7 +2175,11 @@ $('#clipGrid').onclick = async e => {
     if ((await api('/api/clips/' + encodeURIComponent(name) + '/rate', {stars: r})).ok) { c.rating = r || null; clipsSig = ''; loadClips();
       toast(r ? `Rated ${r}★ - new clips will be picked more like your favourites` : 'Rating removed'); }
   }
-  if (a.dataset.act === 'del' && confirm('Delete this clip?')) { await api('/api/clips/' + encodeURIComponent(name), {}, 'DELETE'); clipsSig = ''; loadClips(); }
+  if (a.dataset.act === 'del') {
+    const msg = c.archived ? 'Delete this clip completely? Its thumbnail and view tracking go too.'
+      : isPosted(c) ? 'Delete this clip from the PC? It was posted, so its thumbnail and views stay in Posted.' : 'Delete this clip from the PC?';
+    if (confirm(msg)) { const r = await api('/api/clips/' + encodeURIComponent(name), {}, 'DELETE'); if (r.ok) toast(r.archived ? 'Video deleted. Still in Posted for views' : 'Clip deleted'); clipsSig = ''; loadClips(); }
+  }
   if (a.dataset.act === 'open' && c.status === 'done') openModal(c);
   if (a.dataset.act === 'post' && c.status === 'done') { openModal(c); sheet(true); }
   if (a.dataset.act === 'edit' && c.status === 'done') openEditor(c.name);
@@ -2341,6 +2387,33 @@ $('#stoClean').onclick = async () => {
   const j = await api('/api/storage', {what}); if (j.ok) { toast(`Freed ${gb(j.freed)} (${j.files} files)`); stoScan(); }
 };
 document.querySelector('#setNav button[data-p="post"]').addEventListener('click', stoScan);
+/* ---------- uploaded files (Settings > Files) ---------- */
+const UP_NAMES = {images: 'Images', audio: 'Music', fx: 'Sound effects', other: 'Other files', older: 'Older editor files'};
+const UP_URL = (k, f) => k === 'older' ? '/assets/' + encodeURIComponent(f) : `/uploads/${k}/${encodeURIComponent(f)}`;
+function upRender(j) {
+  const open = new Set($$('#upList details[open]').map(d => d.dataset.k));
+  $('#upDup').textContent = j.dupes ? `${j.dupes} duplicate${j.dupes > 1 ? 's' : ''} found.` : '';
+  $('#upList').innerHTML = Object.keys(UP_NAMES).map(k => {
+    const fs = (j.folders || {})[k] || []; if (k === 'older' && !fs.length) return '';
+    const kb = fs.reduce((a, x) => a + x.size, 0);
+    return `<details class="upgrp" data-k="${k}" ${open.has(k) ? 'open' : ''}><summary>${UP_NAMES[k]} <span class="mut">· ${fs.length} file${fs.length === 1 ? '' : 's'}, ${gb(kb)}</span></summary>
+      <div class="upgrid">${fs.map(x => `<label class="upit" title="${esc(x.file)}"><input type="checkbox" data-k="${k}" value="${esc(x.file)}">
+        ${/\.(png|jpe?g|webp|gif)$/i.test(x.file) ? `<img loading="lazy" src="${UP_URL(k, x.file)}" alt="">` : `<div class="ic">${/\.(mp3|wav|ogg|m4a)$/i.test(x.file) ? '🎵' : '📄'}</div>`}
+        ${x.dupe ? '<span class="dup">copy</span>' : ''}<div class="nm">${esc(x.file)}</div></label>`).join('') || '<span class="mut">Nothing here yet.</span>'}</div></details>`;
+  }).join('');
+}
+async function upLoad() { const j = await api('/api/uploads'); if (j.ok) upRender(j); }
+document.querySelector('#setNav button[data-p="files"]').addEventListener('click', upLoad);
+$('#upDel').onclick = async () => {
+  const files = $$('#upList input:checked').map(i => ({kind: i.dataset.k, file: i.value}));
+  if (!files.length) return toast('Tick the files to delete', true);
+  if (!confirm(`Delete ${files.length} file${files.length > 1 ? 's' : ''} for good? Clips that use them will render without them.`)) return;
+  const j = await api('/api/uploads/delete', {files}); if (j.ok) { toast(`Deleted ${files.length} file${files.length > 1 ? 's' : ''}`); upRender(j); }
+};
+$('#upDedupe').onclick = async () => {
+  const j = await api('/api/uploads/dedupe', {}); if (j.ok) { toast(j.removed ? `Removed ${j.removed} duplicate${j.removed > 1 ? 's' : ''}` : 'No duplicates found'); upRender(j); }
+};
+$('#upOpen').onclick = () => api('/api/open', {what: 'uploads'});
 async function enhRefresh() {
   const r = await api('/api/enhance'); if (!r.ok) return;
   window.ENH = r;
@@ -2720,7 +2793,8 @@ function renderRemote(r) {
     <button class="btn sm" onclick="navigator.clipboard.writeText('${esc(r.url)}');toast('Link copied')"><svg class="i" aria-hidden="true"><use href="#i-copy"/></svg>Copy</button></div>` : '';
   if ($('#remLink').innerHTML !== html) $('#remLink').innerHTML = html;
 }
-const remBody = () => ({remote_password: $('#s_remote_password').value, remote_auto: $('#s_remote_auto').checked});
+const remBody = () => ({remote_password: $('#s_remote_password').value, remote_auto: $('#s_remote_auto').checked,
+  remote_tunnel_host: $('#s_remote_tunnel_host').value.trim(), remote_tunnel_token: $('#s_remote_tunnel_token').value.trim()});
 $('#remSave').onclick = async () => { if ((await api('/api/settings', remBody())).ok) { toast('Saved'); loadConfig(); } };
 $('#remOn').onclick = async () => {
   if (!(await api('/api/settings', remBody())).ok) return;

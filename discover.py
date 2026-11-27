@@ -1,5 +1,5 @@
 """Discover pages: the YouTube gaming feed (who is live, newest and hottest uploads) and campaigns
-(my saved campaign briefs + open campaigns on the Content Rewards board)."""
+(my saved campaign briefs + open campaigns from the Content Rewards, Clipster and Vyro boards)."""
 import json
 import os
 import re
@@ -162,8 +162,10 @@ MONEY = re.compile(r"\$\s?([\d,]+(?:\.\d+)?)\s?([KkMm]?)")
 PLATFORMS = [   # where clippers find paid campaigns (plain links, no referral codes)
     {"name": "Content Rewards", "url": "https://contentrewards.com", "pays": "Per 1K views or prize pools, paid through Whop"},
     {"name": "Clipster", "url": "https://clipster.com", "pays": "Per 1K views or per post, depending on the brief"},
+    {"name": "Vyro", "url": "https://vyro.com/campaigns", "pays": "Per 1K views, brand and creator campaigns (MrBeast and others)"},
     {"name": "Whop", "url": "https://whop.com/discover/", "pays": "Search 'clipping' for creator and brand programs"},
 ]
+GAMING = re.compile(r"\bgta\b|grand theft auto|gaming|\bgame|stream|twitch|kick|\bcs2\b|valorant|fortnite|minecraft|roblox", re.I)
 
 
 def _money(s):
@@ -228,7 +230,7 @@ class _Page(HTMLParser):
             self.texts.append(d.strip())
 
 
-def board_campaigns(limit=12):
+def contentrewards_campaigns(limit=12):
     """Open campaigns from the public Content Rewards board (best effort - the site can change)."""
     p = _Links()
     p.feed(E.http_text(BOARD + "/c/discover", timeout=15))
@@ -246,9 +248,9 @@ def board_campaigns(limit=12):
             kind, amount = "rate", max(_money(" ".join(tail)) or [0])
         if not title or not kind:
             continue
-        gaming = bool(re.search(r"\bgta\b|grand theft auto|gaming|\bgame|stream|twitch|kick", title, re.I))
         rows.append({"title": title[:160], "url": BOARD + it["path"], "kind": kind, "amount": amount,
-                     "poster": it["img"], "gaming": gaming, "organizer": "", "brief": ""})
+                     "poster": it["img"], "gaming": bool(GAMING.search(title)), "organizer": "", "brief": "",
+                     "source": "Content Rewards"})
     rows.sort(key=lambda r: (r["gaming"], r["amount"] if r["kind"] == "rate" else r["amount"] / 2000), reverse=True)
     rows = rows[:limit]
 
@@ -271,6 +273,142 @@ def board_campaigns(limit=12):
     with ThreadPoolExecutor(max_workers=6) as pool:
         rows = list(pool.map(details, rows))
     return [r for r in rows if r.get("open", True)]
+
+
+def _num(v, d=0.0):
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return d
+
+
+def _plat(p):
+    return str(p or "").replace("SOCIAL_MEDIA_PLATFORM_", "").replace("_", " ").title().replace("Tiktok", "TikTok").replace("Youtube", "YouTube")
+
+
+def clipster_campaigns(limit=20):
+    """Active public campaigns from Clipster's own campaign list (the same one clipster.com/discover shows)."""
+    j = json.loads(E.http_text("https://api.clipster.com/campaigns/public?limit=60&include_discord_exclusive=false"
+                               "&status=CAMPAIGN_STATUS_ACTIVE&page=1&sort=-is_popular%2C-rate_per_one_thousand_views",
+                               headers={"Accept": "application/json", "Origin": "https://www.clipster.com"}, timeout=15))
+    rows = []
+    for c in (j.get("data") or {}).get("campaigns") or []:
+        if c.get("status") != "CAMPAIGN_STATUS_ACTIVE" or c.get("is_discord_exclusive"):
+            continue
+        name = str(c.get("name") or "").strip()
+        pay = c.get("pay_summary") or {}
+        rate = _num(pay.get("max_rate_per_one_thousand_views") or c.get("rate_per_one_thousand_views"))
+        per_post = _num(pay.get("max_base_pay_per_post"))
+        if not name or not rate:       # only campaigns that pay for views (that's what clips earn)
+            continue
+        niches = [str(x) for x in ((c.get("niche_data") or {}).get("niches") or [])]
+        cat = str(c.get("category") or "")
+        music = "MUSIC" in cat or c.get("require_sound_usage")
+        lines = [("Do: " if g.get("kind") == "DO" else "Don't: ") + str(g.get("content") or "").strip()
+                 for g in c.get("guidelines") or [] if g.get("content")]
+        plats = ", ".join(_plat(p) for p in c.get("allowed_platforms") or [])
+        if plats:
+            lines.append("Platforms: " + plats)
+        tags = (c.get("caption_requirements") or {}).get("required_tags") or []
+        if tags:
+            lines.append("Required tags: " + " ".join(str(t) for t in tags))
+        if c.get("minimum_views_for_earnings"):
+            lines.append(f"Paid after {int(c['minimum_views_for_earnings']):,} views")
+        for snd in (c.get("sounds") or [])[:1]:
+            if snd.get("sound_name"):
+                lines.append("Use the sound: " + str(snd["sound_name"]))
+        if per_post:
+            lines.append(f"Pays ${per_post:g} per post" + (f" + ${rate:g} per 1K views" if rate else ""))
+        if c.get("max_earnings"):
+            lines.append(f"Budget: ${_num(c['max_earnings']):,.0f}")
+        rows.append({"title": name[:160], "url": "https://www.clipster.com/discover?openedCampaignId=" + str(c.get("id") or ""),
+                     "kind": "rate", "amount": rate, "poster": c.get("thumbnail_url") or "",
+                     "gaming": "GAMING" in niches or "STREAMER" in niches or "GAMING" in cat or bool(GAMING.search(name)),
+                     "music": bool(music), "organizer": "", "brief": "\n".join(lines)[:2500], "source": "Clipster"})
+    rows.sort(key=lambda r: (r["gaming"], not r["music"], r["amount"]), reverse=True)
+    return rows[:limit]
+
+
+def _next_data(html, key):
+    """Find a JSON value inside a Next.js page's streamed data (self.__next_f.push)."""
+    flight = "".join(json.loads(m) for m in re.findall(r'self\.__next_f\.push\(\[1,("(?:[^"\\]|\\.)*")\]\)', html))
+    i = flight.find(key)
+    if i < 0:
+        return None
+    val, _ = json.JSONDecoder().raw_decode(flight, i + len(key))
+    return val
+
+
+def vyro_campaigns(limit=15):
+    """Public campaigns on vyro.com/campaigns (read from the data the page is built with)."""
+    data = _next_data(E.http_text("https://vyro.com/campaigns", timeout=15), '"initialPage":{"data":') or []
+    rows = []
+    for c in data:
+        if not isinstance(c, dict) or c.get("isLocked") or (c.get("status") or {}).get("id") not in (None, "active"):
+            continue
+        name = str(c.get("name") or "").strip()
+        pm, bud, req = c.get("payoutModel") or {}, c.get("budget") or {}, c.get("requirements") or {}
+        rate = _num(c.get("headlineRate") or pm.get("payRate"))
+        left = _num(bud.get("remaining"), -1)
+        if not name or left == 0:
+            continue
+        lines = []
+        tg = c.get("targeting") or {}
+        if tg.get("platforms"):
+            lines.append("Platforms: " + ", ".join(_plat(p) for p in tg["platforms"]))
+        if tg.get("languages"):
+            lines.append("Language: " + ", ".join(str(x).upper() for x in tg["languages"]))
+        txt = req.get("text") or {}
+        tags = [str(t) for t in (txt.get("hashtags") or []) + (txt.get("ftcDisclosureHashtags") or [])]
+        if tags:
+            lines.append("Required hashtags: " + " ".join(tags))
+        vid = req.get("video") or {}
+        if vid.get("minLength") or vid.get("maxLength"):
+            lines.append("Clip length: " + (f"at least {vid['minLength']}s" if vid.get("minLength") else "") +
+                         (f", at most {vid['maxLength']}s" if vid.get("maxLength") else ""))
+        if (req.get("subtitles") or {}).get("required"):
+            lines.append("Subtitles required")
+        if req.get("minViewsPerClip"):
+            lines.append(f"Paid after {int(req['minViewsPerClip']):,} views per clip")
+        links = [str(x.get("url")) for x in (c.get("media") or {}).get("links") or [] if x.get("url")]
+        if links:
+            lines.append("Footage: " + " ".join(links[:3]))
+        if bud.get("value"):
+            lines.append(f"Budget: ${_num(bud['value']):,.0f}" + (f" (${left:,.0f} left)" if left > 0 else ""))
+        if c.get("endDate"):
+            lines.append("Ends: " + str(c["endDate"])[:10])
+        org = str((c.get("workspace") or {}).get("name") or "")
+        rows.append({"title": name[:160], "url": "https://vyro.com/campaigns/" + str(c.get("slug") or ""),
+                     "kind": "rate", "amount": rate, "poster": (c.get("workspace") or {}).get("image") or "",
+                     "gaming": bool(GAMING.search(name + " " + org)), "music": False,
+                     "organizer": org[:80], "brief": "\n".join(lines)[:2500], "source": "Vyro",
+                     "left": round(left) if left > 0 else None})
+    return rows[:limit]
+
+
+SOURCES = [("Content Rewards", contentrewards_campaigns), ("Clipster", clipster_campaigns), ("Vyro", vyro_campaigns)]
+
+
+def board_campaigns():
+    """Open campaigns from every board at once. A board that fails is skipped; the error says which."""
+    rows, bad = [], []
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        futs = [(name, pool.submit(fn)) for name, fn in SOURCES]
+        for name, f in futs:
+            try:
+                rows += f.result(timeout=60)
+            except Exception as e:  # noqa: BLE001
+                bad.append(f"{name} ({str(e)[:60]})")
+    if bad and not rows:
+        raise RuntimeError("; ".join(bad))
+    for r in rows:      # the phone shows "organizer": say where it's from and what's left
+        bits = [r.get("organizer") or "", r["source"]]
+        if r.get("left"):
+            bits.append(f"${r['left']:,} left")
+        r["organizer"] = " · ".join(b for b in bits if b)
+    # gaming and stream clipping first, music-edit campaigns last, then the best pay
+    rows.sort(key=lambda r: (r["gaming"], not r.get("music"), r["amount"] if r["kind"] == "rate" else r["amount"] / 2000), reverse=True)
+    return rows, bad
 
 
 class Campaigns:
@@ -307,7 +445,8 @@ class Campaigns:
             def run():
                 b["busy"] = True
                 try:
-                    b["rows"], b["error"] = board_campaigns(), ""
+                    b["rows"], bad = board_campaigns()
+                    b["error"] = ("Couldn't read " + ", ".join(bad)) if bad else ""
                 except Exception as e:  # noqa: BLE001
                     b["error"] = f"could not read the campaign board ({str(e)[:80]})"
                 finally:

@@ -1013,7 +1013,7 @@ Clip the funniest moments from the podcast. 15-45 seconds. Must include #brandna
   </div>
   <div class="cplist" id="cpMine"></div>
   <h2 class="h2">Open campaigns on Content Rewards</h2>
-  <p class="mut" style="margin:-6px 0 12px">Live from the public board, gaming first. Save one to copy its brief into your campaigns.</p>
+  <p class="mut" style="margin:-6px 0 12px">Live from Content Rewards, Clipster and Vyro, gaming first. Save one to copy its brief into your campaigns.</p>
   <div class="cpboard" id="cpBoard"></div>
   <h2 class="h2">Where to find more</h2>
   <div class="cpplat" id="cpPlat"></div>
@@ -1817,7 +1817,7 @@ function drawCamps() {
     || '<div class="mut">No campaigns yet. Press New campaign, or save one from the board below.</div>';
   const b = CAMPS.board || {};
   $('#cpBoard').innerHTML = (b.rows || []).map((r, i) => `<div class="ytcard"><div class="th" style="background-image:url('${esc(r.poster || '')}')"><span class="tag ${r.gaming ? 'live' : ''}">${r.kind === 'pool' ? '$' + kfmt(r.amount) + ' pool' : '$' + r.amount.toFixed(2) + ' / 1K views'}</span></div>
-      <div class="bd"><div class="t">${esc(r.title)}</div><div class="m">${esc(r.organizer || 'Content Rewards')}</div>
+      <div class="bd"><div class="t">${esc(r.title)}</div><div class="m">${esc(r.organizer || r.source || '')}</div>
       <div class="a"><button class="btn sm pri" data-cpsave="${i}">＋ Save to my campaigns</button><a class="btn sm" href="${esc(r.url)}" target="_blank" rel="noopener">Open</a></div></div></div>`).join('')
     || `<div class="empty mut">${b.busy || !b.at ? 'Reading the campaign board…' : esc(b.error || 'No open campaigns found right now.')}</div>`;
   $('#cpPlat').innerHTML = (b.platforms || []).map(p => `<a href="${esc(p.url)}" target="_blank" rel="noopener"><b>${esc(p.name)}</b><span>${esc(p.pays)}</span></a>`).join('');

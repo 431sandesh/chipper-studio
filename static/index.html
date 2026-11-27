@@ -3102,8 +3102,9 @@ setInterval(poll, 2000);
   $('#updNow').onclick = go; $('#updBarBtn').onclick = go;
   $('#updLater').onclick = () => { $('#updPop').hidden = true; try { sessionStorage.setItem('chipUpdLater', (U.info.latest || {}).label || ''); } catch (e) { /* ignore */ } };
   $('#updBarCancel').onclick = async () => { await api('/api/update', {do: 'cancel'}); load(true); };
-  load();
-  setInterval(() => { if (!U.info || !['waiting', 'downloading', 'installing'].includes(U.info.phase)) load(); }, 30 * 60 * 1000);
+  // Chipper checks a few seconds after it starts, so look again soon, then every 10 minutes
+  load(); setTimeout(load, 15000); setTimeout(load, 45000);
+  setInterval(() => { if (!U.info || !['waiting', 'downloading', 'installing'].includes(U.info.phase)) load(); }, 10 * 60 * 1000);
 })();
 </script>
 </body>

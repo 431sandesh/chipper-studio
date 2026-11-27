@@ -3751,7 +3751,7 @@ class Updater:
             log(f"update check failed: {e}")
 
     def loop(self):
-        time.sleep(20)
+        time.sleep(5)
         while True:
             self.check()
             time.sleep(6 * 3600)
@@ -4249,7 +4249,9 @@ def check_tools():
         try:
             import whisper  # noqa: F401
         except ImportError:
-            log("MISSING: whisper (captions) -> python -m pip install openai-whisper")
+            if not STT.installed():
+                log("captions: no Whisper on this PC yet. Captions come from YouTube or Groq (Settings, AI); "
+                    "with an NVIDIA RTX card you can install AI captions in Settings, Files")
 
 
 def already_running():

@@ -867,6 +867,11 @@ a.btn{text-decoration:none;display:inline-block}
 .pcover img{width:72px;aspect-ratio:9/16;object-fit:cover;border-radius:10px;background:#000;border:1px solid var(--line);cursor:pointer}
 .pcover b{display:block;font-size:14px}.pcover .hint{margin:2px 0 8px}
 .voicebox{display:flex;flex-direction:column;gap:8px}.voicebox textarea{width:100%;box-sizing:border-box;resize:vertical;min-height:52px;font:inherit}
+.updbar{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;margin:0 0 14px;border-radius:var(--r-md);background:var(--tint-violet);border:1px solid var(--line2);color:var(--text)}
+.updbar[hidden],.updpop[hidden]{display:none}.updbar span{flex:1;min-width:180px}
+.updpop{position:fixed;inset:0;z-index:300;display:grid;place-items:center;background:#0008;padding:16px}
+.updcard{width:min(480px,100%);background:var(--panel);border:1px solid var(--line2);border-radius:var(--r-lg);padding:20px;box-shadow:0 20px 60px var(--shadow)}
+.updcard h3{margin:0 0 4px}.updnotes{white-space:pre-wrap;font-size:13px;max-height:220px;overflow:auto;margin:10px 0;padding:10px;border-radius:var(--r-sm);background:var(--panel2)}
 </style>
 </head>
 <body>
@@ -896,6 +901,15 @@ a.btn{text-decoration:none;display:inline-block}
 </aside>
 
 <main>
+<div id="updBar" class="updbar" hidden role="status"><svg class="i" aria-hidden="true"><use href="#i-download"/></svg><span id="updBarTxt"></span>
+  <button class="btn sm pri" id="updBarBtn">Update now</button><button class="btn sm" id="updBarCancel" hidden>Cancel</button></div>
+<div id="updPop" class="updpop" hidden role="dialog" aria-modal="true" aria-labelledby="updTitle"><div class="updcard">
+  <h3 id="updTitle">A new version of Chipper Studio is ready</h3>
+  <p class="mut" id="updVer"></p>
+  <div class="updnotes" id="updNotes"></div>
+  <p class="mut" style="font-size:12px">Your clips, settings and accounts stay as they are. Chipper closes for about a minute while it updates, then opens again by itself. If something is recording, rendering or posting, it waits until that's done.</p>
+  <div class="row" style="justify-content:flex-end"><button class="btn" id="updLater">Later</button><button class="btn pri" id="updNow"><svg class="i" aria-hidden="true"><use href="#i-download"/></svg>Update now</button></div>
+</div></div>
 <!-- ================= LIVE ================= -->
 <section id="live" class="on">
   <div class="phead"><div><h1>Live streams</h1><p>Paste a live link and Chipper records it, watches chat and cuts a clip every time it spikes. Up to 3 streams at once.</p></div></div>
@@ -3030,6 +3044,66 @@ setInterval(poll, 2000);
   const box = m[1] === 'edit' ? $('#editor') : $('#coverEd');
   new MutationObserver(() => { if (!box.classList.contains('on')) done(); }).observe(box, {attributes: true, attributeFilter: ['class']});
   if (m[1] === 'edit') openEditor(name); else openCoverEditor(CLIPS.find(c => c.name === name) || {name});
+})();
+/* ---- updates (Windows installer version only, on the PC itself) */
+(() => {
+  const U = {info: null, timer: null};
+  const mb = n => n ? ' (' + Math.round(n / 1048576) + ' MB)' : '';
+  async function load(force) {
+    const r = await api('/api/update' + (force ? '?t=' + Date.now() : '')).catch(() => null);
+    if (!r || !r.ok) return;
+    U.info = r; draw();
+  }
+  function draw() {
+    const r = U.info; if (!r || !r.local || !r.installed) return;
+    try {
+      const seen = localStorage.getItem('chipVer');
+      if (seen && seen !== r.current) toast('Chipper Studio is updated to ' + r.current);
+      localStorage.setItem('chipVer', r.current);
+    } catch (e) { /* ignore */ }
+    const bar = $('#updBar'), L = r.latest || {};
+    const working = ['waiting', 'downloading', 'installing'].includes(r.phase);
+    bar.hidden = !(r.available || working || r.phase === 'error');
+    $('#updBarCancel').hidden = r.phase !== 'waiting';
+    $('#updBarBtn').hidden = working;
+    $('#updBarTxt').textContent =
+      r.phase === 'waiting' ? `Will update to ${L.label} when Chipper is free (something is recording, rendering or posting).` :
+      r.phase === 'downloading' ? `Downloading Chipper Studio ${L.label}… ${r.pct}%` :
+      r.phase === 'installing' ? 'Updating… Chipper closes and opens again in about a minute. This page reloads by itself.' :
+      r.phase === 'error' ? `The update didn't finish: ${r.error}` :
+      `Chipper Studio ${L.label} is available (you have ${r.current}).`;
+    if (r.phase === 'error') $('#updBarBtn').textContent = 'Try again';
+    if (working) { clearTimeout(U.timer); U.timer = setTimeout(r.phase === 'installing' ? waitBack : () => load(true), 1500); }
+    if (r.available && !working && r.phase !== 'error') {
+      let later = '';
+      try { later = sessionStorage.getItem('chipUpdLater') || ''; } catch (e) { /* ignore */ }
+      if (later !== L.label || L.required) {
+        $('#updVer').textContent = `Version ${L.label}${mb(L.size)} · you have ${r.current}` + (L.required ? ' · this update is needed' : '');
+        $('#updNotes').textContent = L.notes || 'Fixes and improvements.';
+        $('#updNotes').hidden = false;
+        $('#updLater').hidden = !!L.required;
+        $('#updPop').hidden = false;
+      }
+    }
+  }
+  async function go() {
+    $('#updPop').hidden = true;
+    const r = await api('/api/update', {do: 'install'});
+    if (!r.ok) return toast(r.error || 'Could not start the update', true);
+    U.info = {...r, local: true}; draw();
+  }
+  async function waitBack() {
+    try {
+      const r = await fetch('/api/update', {cache: 'no-store'}).then(x => x.json());
+      if (r.ok && r.phase !== 'installing') { location.reload(); return; }   // Chipper is back (new version, or the old one if the install failed)
+    } catch (e) { /* Chipper is restarting */ }
+    U.timer = setTimeout(waitBack, 3000);
+  }
+  $('#updNow').onclick = go; $('#updBarBtn').onclick = go;
+  $('#updLater').onclick = () => { $('#updPop').hidden = true; try { sessionStorage.setItem('chipUpdLater', (U.info.latest || {}).label || ''); } catch (e) { /* ignore */ } };
+  $('#updBarCancel').onclick = async () => { await api('/api/update', {do: 'cancel'}); load(true); };
+  load();
+  setInterval(() => { if (!U.info || !['waiting', 'downloading', 'installing'].includes(U.info.phase)) load(); }, 30 * 60 * 1000);
 })();
 </script>
 </body>

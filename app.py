@@ -24,6 +24,7 @@ if os.path.isdir(_BIN):
     os.environ["PATH"] = _BIN + os.pathsep + os.environ.get("PATH", "")
 
 import hashlib
+import zipfile
 import urllib.error
 import urllib.request
 import hmac
@@ -409,9 +410,17 @@ def process_clip(task):
         log(f"clip {name} failed: {e}")
 
 
+WORKING = {"render": 0, "post": 0}      # what is running right now (the updater waits for these)
+
+
 def worker():
     while True:
-        process_clip(jobs.get())
+        job = jobs.get()
+        WORKING["render"] += 1
+        try:
+            process_clip(job)
+        finally:
+            WORKING["render"] -= 1
 
 
 threading.Thread(target=worker, daemon=True).start()
@@ -898,7 +907,16 @@ def set_post(name, platform, **kw):
 
 def post_worker():
     while True:
-        name, platform, opts = posts.get()
+        item = posts.get()
+        WORKING["post"] += 1
+        try:
+            _post_one(*item)
+        finally:
+            WORKING["post"] -= 1
+
+
+def _post_one(name, platform, opts):
+    if True:
         m = read_meta(name) or {}
         video = os.path.join(out_dir(), name + ".mp4")
         tags = m.get("hashtags", [])
@@ -3674,6 +3692,167 @@ def thumb(fname):
     return send_from_directory(DIRS["thumbs"], fname)
 
 
+# ---------------------------------------------------------------- updates for the Windows installer version
+# Only a copy installed with ChipperStudioSetup has a VERSION file. It asks the website's update service for the
+# newest published version; the user presses Update, Chipper waits until nothing is running, then the installer runs
+# quietly (keeping their choices, clips and settings) and Chipper starts again by itself.
+UPDATE_SITE = "https://chipperstudio.nepconlabs.com"
+
+
+def _read_version():
+    try:
+        with open(os.path.join(HERE, "VERSION"), encoding="utf-8-sig") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
+def _vnum(label):
+    m = re.match(r"^v?(\d+)\.(\d+)(?:\.(\d+))?$", str(label or "").replace("pc-", "").strip())
+    return int(m[1]) * 1000000 + int(m[2]) * 10000 + int(m[3] or 0) if m else 0
+
+
+class Updater:
+    def __init__(self):
+        self.current = _read_version()
+        self.latest = None            # {label, version, notes, required, size, url}
+        self.phase = ""               # "" | waiting | downloading | installing | error
+        self.pct = 0
+        self.error = ""
+        self.checked = 0
+        self.lock = threading.Lock()
+
+    @property
+    def installed(self):
+        return bool(self.current) and os.name == "nt"
+
+    def available(self):
+        return bool(self.latest and _vnum(self.latest["label"]) > _vnum(self.current))
+
+    def info(self):
+        return {"installed": self.installed, "current": self.current, "latest": self.latest, "available": self.available(),
+                "phase": self.phase, "pct": self.pct, "error": self.error, "checked": self.checked}
+
+    def check(self):
+        if not self.installed:
+            return
+        try:
+            req = urllib.request.Request(UPDATE_SITE + "/api/latest?app=windows", headers={"User-Agent": f"ChipperStudio/{self.current}"})
+            with urllib.request.urlopen(req, timeout=20) as r:
+                j = json.loads(r.read().decode("utf-8"))
+            if j.get("ok") is False or not j.get("label"):
+                return
+            self.latest = {"label": j["label"], "notes": str(j.get("notes") or "")[:3000], "required": bool(j.get("required")),
+                           "size": int(j.get("size") or 0), "url": j.get("url") or UPDATE_SITE + "/api/download?app=windows"}
+            self.checked = time.time()
+            if self.available():
+                log(f"update: Chipper Studio {self.latest['label']} is available (you have {self.current})")
+        except Exception as e:  # noqa: BLE001
+            log(f"update check failed: {e}")
+
+    def loop(self):
+        time.sleep(20)
+        while True:
+            self.check()
+            time.sleep(6 * 3600)
+
+    @staticmethod
+    def busy():
+        live = [j for j in JOBS.values() if j.state != "idle"]
+        return bool(live) or vod.busy() or jobs.qsize() > 0 or posts.qsize() > 0 or WORKING["render"] > 0 or WORKING["post"] > 0
+
+    def start(self):
+        with self.lock:
+            if self.phase in ("waiting", "downloading", "installing"):
+                return
+            if not self.available():
+                raise RuntimeError("you already have the newest version")
+            self.phase, self.pct, self.error = "waiting", 0, ""
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def cancel(self):
+        if self.phase == "waiting":
+            self.phase = ""
+
+    def _run(self):
+        try:
+            if self.busy():
+                log("update: waiting until nothing is recording, rendering or posting")
+            while self.busy():
+                time.sleep(15)
+                if self.phase != "waiting":
+                    return
+            self.phase = "downloading"
+            work = os.path.join(HERE, "work", "update")
+            shutil.rmtree(work, ignore_errors=True)
+            os.makedirs(work, exist_ok=True)
+            pkg = os.path.join(work, "setup.zip")
+            req = urllib.request.Request(self.latest["url"], headers={"User-Agent": f"ChipperStudio/{self.current}"})
+            with urllib.request.urlopen(req, timeout=60) as r, open(pkg, "wb") as f:
+                total = int(r.headers.get("Content-Length") or self.latest.get("size") or 0)
+                got = 0
+                while True:
+                    b = r.read(1 << 20)
+                    if not b:
+                        break
+                    f.write(b)
+                    got += len(b)
+                    if total:
+                        self.pct = min(99, round(got * 100 / total))
+            exe = pkg
+            if zipfile.is_zipfile(pkg):
+                with zipfile.ZipFile(pkg) as z:
+                    names = [n for n in z.namelist() if n.lower().endswith(".exe")]
+                    if not names:
+                        raise RuntimeError("the download has no installer in it")
+                    z.extract(names[0], work)
+                    exe = os.path.join(work, names[0])
+            elif not open(pkg, "rb").read(2) == b"MZ":
+                raise RuntimeError("the download is not an installer")
+            self.pct, self.phase = 100, "installing"
+            log(f"update: installing Chipper Studio {self.latest['label']}, Chipper restarts by itself in a minute")
+            py = os.path.join(HERE, "python", "python.exe")
+            if not os.path.isfile(py):
+                py = sys.executable
+            cmd = os.path.join(work, "update.cmd")
+            with open(cmd, "w", encoding="utf-8") as f:
+                f.write("@echo off\r\ntitle Updating Chipper Studio\r\necho Updating Chipper Studio, please wait...\r\n"
+                        "timeout /t 3 /nobreak >nul\r\n"
+                        f'"{exe}" /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP- /LOG="{os.path.join(work, "setup.log")}"\r\n'
+                        f'start "" /min "{py}" "{os.path.join(HERE, "app.py")}" --no-browser --updated\r\n')
+            subprocess.Popen(["cmd", "/c", cmd], cwd=work, creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0), close_fds=True)
+            time.sleep(1.5)
+            os._exit(0)
+        except Exception as e:  # noqa: BLE001
+            self.phase, self.error = "error", str(e)[:300]
+            log(f"update failed: {e}")
+
+
+UPD = Updater()
+
+
+@app.get("/api/update")
+def api_update():
+    return ok(**UPD.info(), local=is_local())
+
+
+@app.post("/api/update")
+def api_update_do():
+    if not is_local():
+        return fail("update Chipper on the PC itself")
+    d = request.get_json(force=True) or {}
+    try:
+        if d.get("do") == "check":
+            UPD.check()
+        elif d.get("do") == "cancel":
+            UPD.cancel()
+        else:
+            UPD.start()
+    except Exception as e:  # noqa: BLE001
+        return fail(e)
+    return ok(**UPD.info(), local=True)
+
+
 @app.post("/api/restart")
 def api_restart():
     """Start a fresh copy of Chipper in a new window, then close this one (works from the remote link too)."""
@@ -4108,6 +4287,7 @@ if __name__ == "__main__":
     sync_ytauth()
     threading.Thread(target=watcher.loop, daemon=True).start()
     threading.Thread(target=tts_setup, daemon=True).start()
+    threading.Thread(target=UPD.loop, daemon=True).start()
     log(f"Chipper Studio on http://127.0.0.1:{PORT}  (clips -> {out_dir()})")
     threading.Thread(target=tunnel.watchdog, daemon=True).start()
     if settings.get("remote_auto") and settings.get("remote_password"):

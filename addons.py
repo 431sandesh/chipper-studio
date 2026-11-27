@@ -54,6 +54,9 @@ def install_nvidia():
     say("  This downloads about 6 GB and can take 15-40 minutes. Please keep this window open.")
     import nvidia_enhance as NV
     vsr = NV.NvidiaVSR(lambda m: say("  " + str(m)))
+    if vsr.ready() and NV.GpuWhisper(vsr, lambda m: None).installed():
+        say("  Already installed.")
+        return True
     done = threading.Event()
     threading.Thread(target=watch, args=(vsr, done), daemon=True).start()
     vsr.busy = "installing"

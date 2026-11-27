@@ -51,17 +51,18 @@ jobs:
           & $iscc installer\chipper.iss
           if ($LASTEXITCODE) { throw "Inno Setup failed" }
           $v = $env:CHIPPER_VERSION
-          @"
-CHIPPER Studio $v for Windows 10 / 11
-
-1. Double-click ChipperStudioSetup-$v.exe
-2. If Windows says "Windows protected your PC", click More info, then Run anyway.
-3. Choose Standard (any PC) or Everything (NVIDIA RTX graphics cards).
-4. Start Chipper from the CHIPPER Studio shortcut on your desktop.
-
-Your clips and settings are kept when you install a newer version.
-https://chipperstudio.nepconlabs.com
-"@ | Out-File "dist\How to install.txt" -Encoding utf8
+          $lines = @(
+            "CHIPPER Studio $v for Windows 10 / 11",
+            "",
+            "1. Double-click ChipperStudioSetup-$v.exe",
+            "2. If Windows says 'Windows protected your PC', click More info, then Run anyway.",
+            "3. Choose Standard (any PC) or Everything (NVIDIA RTX graphics cards).",
+            "4. Start Chipper from the CHIPPER Studio shortcut on your desktop.",
+            "",
+            "Your clips and settings are kept when you install a newer version.",
+            "https://chipperstudio.nepconlabs.com"
+          )
+          $lines | Out-File "dist\How to install.txt" -Encoding utf8
           Compress-Archive -Path "dist\ChipperStudioSetup-$v.exe", "dist\How to install.txt" -DestinationPath "dist\ChipperStudioSetup-$v.zip" -CompressionLevel Optimal
           Get-ChildItem dist | Format-Table Name, Length
 

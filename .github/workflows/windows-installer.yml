@@ -50,6 +50,19 @@ jobs:
           if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
           & $iscc installer\chipper.iss
           if ($LASTEXITCODE) { throw "Inno Setup failed" }
+          $v = $env:CHIPPER_VERSION
+          @"
+CHIPPER Studio $v for Windows 10 / 11
+
+1. Double-click ChipperStudioSetup-$v.exe
+2. If Windows says "Windows protected your PC", click More info, then Run anyway.
+3. Choose Standard (any PC) or Everything (NVIDIA RTX graphics cards).
+4. Start Chipper from the CHIPPER Studio shortcut on your desktop.
+
+Your clips and settings are kept when you install a newer version.
+https://chipperstudio.nepconlabs.com
+"@ | Out-File "dist\How to install.txt" -Encoding utf8
+          Compress-Archive -Path "dist\ChipperStudioSetup-$v.exe", "dist\How to install.txt" -DestinationPath "dist\ChipperStudioSetup-$v.zip" -CompressionLevel Optimal
           Get-ChildItem dist | Format-Table Name, Length
 
       - name: Release
@@ -60,8 +73,8 @@ jobs:
           PUBLISH: ${{ inputs.publish }}
         run: |
           $tag = "pc-v$env:CHIPPER_VERSION"
-          $file = "dist\ChipperStudioSetup-$env:CHIPPER_VERSION.exe"
-          $notes = if ($env:NOTES) { $env:NOTES } else { "Chipper Studio $env:CHIPPER_VERSION for Windows 10/11. Download the .exe and run it." }
+          $file = "dist\ChipperStudioSetup-$env:CHIPPER_VERSION.zip"
+          $notes = if ($env:NOTES) { $env:NOTES } else { "Chipper Studio $env:CHIPPER_VERSION for Windows 10/11. Download the .zip, unzip it and run ChipperStudioSetup." }
           $notes += "`n`nWindows may show 'Windows protected your PC' the first time: click More info, then Run anyway."
           if ($env:PUBLISH -eq 'true') {
             gh release create $tag $file --title "Chipper Studio $env:CHIPPER_VERSION for Windows" --notes $notes --latest

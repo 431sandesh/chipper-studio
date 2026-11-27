@@ -24,6 +24,38 @@ def run(cmd, **kw):
     return subprocess.run(cmd, **kw)
 
 
+PROGRESS = threading.local()     # .cb(fraction) set by app.py while a clip renders on this thread
+
+
+def run_progress(cmd, total, cwd=None):
+    """Run ffmpeg and report how far it has got (0..1) to PROGRESS.cb, from its own progress output."""
+    cb = getattr(PROGRESS, "cb", None)
+    if not cb or total <= 0:
+        return run(cmd, cwd=cwd, capture_output=True, text=True)
+    cmd = cmd[:1] + ["-progress", "pipe:1", "-nostats"] + cmd[1:]
+    p = subprocess.Popen(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                         encoding="utf-8", errors="replace", creationflags=NO_WINDOW)
+    err = []
+    t = threading.Thread(target=lambda: err.extend(p.stderr), daemon=True)
+    t.start()
+    last = 0.0
+    for line in p.stdout:
+        if line.startswith("out_time_us=") or line.startswith("out_time_ms="):
+            try:
+                f = min(0.99, int(line.split("=", 1)[1]) / 1e6 / total)
+            except ValueError:
+                continue
+            if f - last >= 0.02:
+                last = f
+                try:
+                    cb(f)
+                except Exception:  # noqa: BLE001
+                    pass
+    p.wait()
+    t.join(timeout=2)
+    return subprocess.CompletedProcess(cmd, p.returncode, "", "".join(err))
+
+
 def even(x):
     return max(2, int(round(x)) // 2 * 2)
 
@@ -976,13 +1008,13 @@ what when where who why how yes no not do does did dont don't im i'm its it's u 
 can will would could should get got go going have has had all out up one more some very really too
 from about there here then than chat stream""".split())
 
-HOOKS = {
-    "funny": ["I can't stop laughing at this", "He really just did that", "Chat lost it at this moment",
-              "This is the funniest thing on stream today", "Nobody expected this"],
-    "hype":  ["This play was INSANE", "Chat went crazy for this", "The clutch of the year",
-              "Wait for the ending", "Best moment of the stream"],
-    "shock": ["Wait… what just happened?", "Watch this closely", "Nobody saw this coming",
-              "He did NOT expect this", "Chat couldn't believe it"],
+HOOKS = {   # backup hooks when no AI is set up; {name} = the streamer, when known
+    "funny": ["{name} can't stop laughing", "{name} really just did that", "{name}'s funniest moment today",
+              "Nobody expected {name} to say this", "{name} lost it here"],
+    "hype":  ["{name} pulls off the impossible", "{name}'s clutch of the year", "{name} wins it at the last second",
+              "{name}'s best moment this stream", "{name} goes all in"],
+    "shock": ["{name} did NOT expect this", "{name} can't believe it", "Nobody saw this coming for {name}",
+              "{name} gets the shock of his life", "This changed everything for {name}"],
 }
 EMOJI = {"funny": "😂💀", "hype": "🔥😤", "shock": "😳👀"}
 
@@ -1026,7 +1058,9 @@ def offline_meta(words, chat, channel, base_tags, duration=0):
     transcript = " ".join(w[2] for w in words or [])
     texts = _chat_texts(chat)
     mood = detect_mood(texts)
-    hook = random.choice(HOOKS[mood])
+    who = clean_channel(channel) or "He"
+    hook = random.choice(HOOKS[mood]).replace("{name}'s", who + "'s" if who != "He" else "His").replace("{name}", who)
+    hook = hook[0].upper() + hook[1:]
     # a short punchy line from the clip makes a better hook than a template
     for sent in re.split(r"(?<=[.!?])\s+", transcript):
         wc = len(sent.split())
@@ -1166,17 +1200,40 @@ Do this:
    - open on action or a strong first line, never on silence, greetings or filler;
    - end just after the payoff so the video loops cleanly - cut any rambling after it;
    - aim for {lo:.0f}-{hi:.0f} s, minimum {min(lo, 8):.0f} s, maximum {max(hi, 15):.0f} s. If the whole clip is needed, use 0 and {duration:.1f}.
-3. "hook": on-screen text for the first 3 seconds. 3-7 words. Creates a curiosity gap. True to the clip, must NOT
-   spoil the payoff, no emojis, no hashtags, no generic filler like "Wait for it", "Insane moment".
-4. "yt_title": YouTube Shorts title, max 70 characters, curiosity-driven, at most one emoji, no hashtags. Use the
-   real creator / artist / movie / brand name only if it is given above. NEVER put ids, codes or random letters in it.
+3. "hooks": THREE different on-screen hook options for the first 3 seconds, best first. Each 3-7 words.
+   A stranger scrolling past must instantly see WHAT is happening and WHY it matters. So every hook MUST name
+   something concrete from the clip: the person (by real name if given above), a number or amount, an object,
+   a place, or the stakes. Good patterns:
+     - an action with stakes: "He sold a $3M car for $1", "Speed bets $1M on one kick"
+     - a specific question: "Can a PS5 survive this fall?", "Who gets the last PS5?"
+     - a bold claim from the speech: "He says GTA 6 looks real"
+   NEVER write about the chat or the audience ("chat goes wild", "chat explodes", "the chat can't stop…").
+   NEVER use vague filler: "wait for it", "insane moment", "you won't believe", "what just happened",
+   "what did he just say/claim", "this is crazy", "watch till the end", "epic fail". No emojis, no hashtags.
+   True to the clip, and it must make you want the payoff without giving it away.
+   "hook" = the best of the three.
+4. "yt_title": YouTube Shorts title, max 70 characters. Same rule: say what happens, with the real name / number /
+   stakes, so it reads like news, e.g. "Carry is giving away a PS5 this December 😱". At most one emoji, no hashtags.
+   Use the real creator / artist / movie / brand name only if it is given above. NEVER put ids, codes or random
+   letters in it, and never mention "chat" unless the chat itself is the story.
 5. "caption": Instagram/TikTok caption, 1-2 short sentences in a natural voice that fits the content type, ends with
    a question or call to action, 1-2 emojis.
 6. "hashtags": 6-8 real, readable tags with #: 1-2 broad, the creator / topic if known, 3-4 niche ones. Prefer some of: {" ".join(base_tags)}{must}
 7. "score": 1-10, how likely this short is to perform well{' AND how well it matches the campaign brief' if brief else ''}. "why": one short sentence.
 
 {lang_rule(ctx.get("lang"))}
-Return ONLY a JSON object with keys: start, end, hook, yt_title, caption, hashtags, score, why."""
+Return ONLY a JSON object with keys: start, end, hooks, hook, yt_title, caption, hashtags, score, why."""
+
+
+# hooks that say nothing about the clip: the AI is told not to write them, and this catches any that slip through
+VAGUE_HOOK = re.compile(r"(?i)\bchat\b|wait for it|insane moment|won'?t believe|what (just )?happened|what did (he|she|they) just|"
+                        r"this is (so )?crazy|watch (till|until) the end|epic fail|gone wrong|you need to see|craziest moment")
+
+
+def pick_hook(options):
+    """The first hook that names something real (not vague filler); else the first one."""
+    opts = [o for o in options if o]
+    return next((o for o in opts if not VAGUE_HOOK.search(o)), opts[0] if opts else "")
 
 
 def _parse_ai(text, duration=0):
@@ -1185,7 +1242,9 @@ def _parse_ai(text, duration=0):
     if isinstance(tags, str):
         tags = tags.split()
     tags = [t if t.startswith("#") else "#" + t for t in (str(x).strip() for x in tags) if t][:10]
-    out = {"hook": str(j.get("hook", "")).strip().strip('"'), "caption": str(j.get("caption", "")).strip(),
+    opts = [str(h).strip().strip('"') for h in (j.get("hooks") or []) if str(h).strip()]
+    hook = pick_hook([str(j.get("hook", "")).strip().strip('"')] + opts)
+    out = {"hook": hook, "hook_options": [h for h in opts if h != hook][:3], "caption": str(j.get("caption", "")).strip(),
            "yt_title": str(j.get("yt_title", "") or j.get("hook", "")).strip()[:100],
            "hashtags": tags, "ai": True, "why": str(j.get("why", "")).strip()[:200]}
     try:
@@ -1876,6 +1935,8 @@ def clean_scene(sc):
         if snd in SFX or snd.startswith("file:"):
             out["sfx"].append({"id": str(f.get("id") or "")[:20], "sound": snd if snd in SFX else "file:" + os.path.basename(snd[5:]),
                                "start": _num(f.get("start"), 0, 0, 3600), "vol": _num(f.get("vol"), 0.8, 0, 2)})
+            if f.get("duck"):      # a voice-over: the clip's own sound gets quieter while it speaks
+                out["sfx"][-1].update(duck=True, len=_num(f.get("len"), 2, 0.2, 120), name=str(f.get("name") or "")[:60])
     bl = sc.get("bleep") if isinstance(sc.get("bleep"), dict) else {}
     out["bleep"] = {"mode": "mute" if bl.get("mode") == "mute" else "beep", "camblur": bool(bl.get("camblur")),
                     "spans": sorted([[_num(q[0], 0, 0, 86400), _num(q[1], 0, 0, 86400)] for q in (bl.get("spans") or [])[:80]
@@ -1892,7 +1953,7 @@ def clean_scene(sc):
             continue
         k = l.get("kind")
         base = {"kind": k, "id": str(l.get("id") or "")[:20], "name": str(l.get("name") or "")[:40],
-                "hidden": bool(l.get("hidden"))}
+                "hidden": bool(l.get("hidden")), "locked": bool(l.get("locked"))}   # locked: can't be moved by touch
         if k == "video":
             cr = l.get("crop") if isinstance(l.get("crop"), list) and len(l.get("crop")) == 4 else [0, 0, 1, 1]
             base.update(role=l.get("role") if l.get("role") in ("cam", "game", "custom") else "custom",
@@ -2618,6 +2679,11 @@ def render_scene(raw_path, out_path, scene, words, hook_text, work_dir, start=0.
                 g.append(f"sine=f=1000:r=44100,atrim=0:{dur:.2f},aformat=channel_layouts=stereo,"
                          f"volume=volume='if({bexpr},0.32,0)':eval=frame[bp];[{a0}][bp]amix=inputs=2:duration=first:normalize=0[a02]")
                 a0 = "a02"
+        ducks = [(f["start"] - 0.08, f["start"] + f["len"] + 0.15) for _, f in snds if f.get("duck")]
+        if ducks:
+            dex = "+".join(f"between(t,{x:.2f},{y:.2f})" for x, y in ducks)
+            g.append(f"[{a0}]volume=volume='if({dex},0.28,1)':eval=frame[a0d]")
+            a0 = "a0d"
         if sc["loop"] and dur > 2:
             g.append(f"[{a0}]afade=t=in:d=0.25,afade=t=out:st={dur - 0.35:.2f}:d=0.35[a03]")
             a0 = "a03"
@@ -2654,7 +2720,7 @@ def render_scene(raw_path, out_path, scene, words, hook_text, work_dir, start=0.
     cmd += audio_inputs
     cmd += ["-filter_complex", ";".join(g), "-map", "[v]", "-map", amap, "-t", f"{dur:.2f}"] + enc_args() + [
             "-c:a", "aac", "-b:a", "160k", "-movflags", "+faststart", os.path.abspath(tmpout)]
-    r = run(cmd, cwd=work_dir, capture_output=True, text=True)
+    r = run_progress(cmd, dur, cwd=work_dir)
     for p in tmpfiles:
         try:
             os.remove(p)

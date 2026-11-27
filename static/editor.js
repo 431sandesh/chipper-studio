@@ -1299,7 +1299,7 @@
   ];
   const fxArr = () => (ED.scene.fx = ED.scene.fx || []);
   const sfxArr = () => (ED.scene.sfx = ED.scene.sfx || []);
-  const sndLabel = n => n.startsWith('file:') ? '🎵 ' + n.slice(5).replace(/\.[^.]+$/, '') : (CFG.sfx || {})[n] || n;
+  const sndLabel = n => n.startsWith('file:voice_') ? '🗣 ' + n.slice(11).replace(/_[0-9a-f]{10}\.mp3$/, '').replace(/_/g, ' ') : n.startsWith('file:') ? '🎵 ' + n.slice(5).replace(/\.[^.]+$/, '') : (CFG.sfx || {})[n] || n;
   const sndUrl = n => n.startsWith('file:') ? '/sounds/' + encodeURIComponent(n.slice(5)) : `/sfx/${n}.wav`;
   function playSnd(n, vol = 0.9) { try { const a = new Audio(sndUrl(n)); a.volume = clamp(vol, 0, 1); a.play().catch(() => {}); } catch (e) { /* ignore */ } }
   const addFx = (type, start, dur, amt = 0.7, color = '#ffffff') => fxArr().push({id: uid(), type, start: +start.toFixed(2), dur, amt, color});
@@ -1322,13 +1322,46 @@
     $$('#edFxBtns button').forEach(b => b.onclick = act(() => { const k = b.dataset.k; addFx(k, Math.max(0, tNow()), FXN[k][2], 0.7, k === 'flash' ? '#ffffff' : '#ffffff'); }));
     $('#edSfxBtns').innerHTML = Object.entries(CFG.sfx || {}).map(([k, v]) => `<button data-k="${k}" title="Tap to add at the playhead, long-press or right-click to listen"><svg class="i" aria-hidden="true"><use href="#i-music"/></svg>${esc(v)}</button>`).join('');
     $$('#edSfxBtns button').forEach(b => { b.onclick = act(() => { addSfx(b.dataset.k, Math.max(0, tNow())); playSnd(b.dataset.k); }); b.oncontextmenu = e => { e.preventDefault(); playSnd(b.dataset.k); }; });
-    drawMySounds();
+    drawMySounds(); voiceSetup();
   }
   function drawMySounds() {
     const list = CFG.sounds || [];
     $('#edMySnds').innerHTML = list.map(f => `<button data-f="${esc(f)}"><svg class="i" aria-hidden="true"><use href="#i-music"/></svg>${esc(f.replace(/\.[^.]+$/, '').slice(0, 24))}</button>`).join('');
     $$('#edMySnds button').forEach(b => { b.onclick = act(() => { addSfx('file:' + b.dataset.f, Math.max(0, tNow())); playSnd('file:' + b.dataset.f); }); b.oncontextmenu = e => { e.preventDefault(); playSnd('file:' + b.dataset.f); }; });
   }
+  /* ---- Voice: an English voice reads a line (made on the PC, added like a sound effect) */
+  const VO = {voices: null, last: null};
+  async function voiceSetup() {
+    if (VO.voices) return;
+    const j = await fetch('/api/tts').then(r => r.json()).catch(() => ({}));
+    if (!j.ok) return;
+    VO.voices = j.voices;
+    const keep = localStorage.getItem('chipVoice') || '';
+    $('#edVoVoice').innerHTML = j.voices.map(v => `<option value="${v.id}" ${v.id === keep ? 'selected' : ''}>${esc(v.name)} (${v.gender === 'f' ? 'female' : 'male'}, ${v.accent})</option>`).join('');
+    if (!j.natural) $('#edVoNote').textContent = j.installing ? 'Getting the natural voices ready on the PC. Until then the Windows voice is used.' : 'Natural voices need the edge-tts package on the PC. Until then the Windows voice is used.';
+  }
+  async function voiceMake() {
+    const text = $('#edVoText').value.trim();
+    if (!text) { toast('Type what the voice should say', true); return null; }
+    const body = {text, voice: $('#edVoVoice').value, rate: +$('#edVoRate').value};
+    const key = JSON.stringify(body);
+    if (VO.last && VO.last.key === key) return VO.last;
+    try { localStorage.setItem('chipVoice', body.voice); } catch (e) { /* ignore */ }
+    toast('Making the voice…');
+    const j = await fetch('/api/tts', {method: 'POST', headers: {'Content-Type': 'application/json'}, body: key}).then(r => r.json()).catch(() => ({}));
+    if (!j.ok) { toast(j.error || 'Could not make the voice', true); return null; }
+    if (j.sounds) { CFG.sounds = j.sounds; drawMySounds(); }
+    return (VO.last = {key, file: j.file, secs: j.secs || 2, by: j.by});
+  }
+  $('#edVoHook').onclick = () => { const h = $('#edHook').value.trim(); if (!h) return toast('This clip has no hook yet', true); $('#edVoText').value = h; };
+  $('#edVoListen').onclick = async () => { const v = await voiceMake(); if (v) playSnd('file:' + v.file, 1); };
+  $('#edVoAdd').onclick = async () => {
+    const v = await voiceMake(); if (!v) return;
+    const f = {id: uid(), sound: 'file:' + v.file, start: +Math.max(0, tNow()).toFixed(2), vol: 1};
+    if ($('#edVoDuck').checked) Object.assign(f, {duck: true, len: v.secs});
+    sfxArr().push(f); syncAll(); commit();
+    toast(`Voice added at ${fmt(f.start)} (${v.by === 'Windows voice' ? 'Windows voice' : v.by || 'voice'})`);
+  };
   $('#edSndFile').onchange = async e => {
     const f = e.target.files[0]; e.target.value = ''; if (!f) return;
     const fd = new FormData(); fd.append('file', f);
@@ -2125,6 +2158,7 @@
     } else if (t === 'combo') fxMove($('#edCombos'), hs());
     else if (t === 'stk') fxMove($('#edStickers'), hs());
     else if (t === 'vfx') fxMove($('#edFxBtns'), hs());
+    else if (t === 'voice') { fxMove($('#edVoiceBox'), M); voiceSetup(); }
     else if (t === 'loop') {
       fxMove($('#edLoop').closest('label'), M);
       const r = row('<span class="ctlab">Rise at end</span>'); fxMove($('#edMuPeak').closest('.row'), r); r.lastChild.style.flex = '1';

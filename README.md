@@ -30,15 +30,23 @@ AI Enhance (NVIDIA video upscaling) needs an NVIDIA graphics card, so it only wo
 
 ## Install on Windows
 
+1. Download **ChipperStudioSetup.exe** from [chipperstudio.nepconlabs.com](https://chipperstudio.nepconlabs.com) or the [Releases page](https://github.com/431sandesh/chipper-studio/releases).
+2. Run it. If Windows shows "Windows protected your PC", click **More info**, then **Run anyway**.
+3. Pick what to install:
+   - **Standard (any PC):** Chipper, plus the small browser it uses to post to TikTok.
+   - **Everything (NVIDIA RTX cards):** also the NVIDIA RTX AI pack, which is AI Enhance (sharper video) and AI captions with Whisper large-v3. It's about a 6 GB download and takes 15 to 40 minutes. Only choose it if your PC has an NVIDIA RTX 20, 30, 40 or 50 series card.
+4. Start Chipper from the **Chipper Studio** shortcut on your desktop. Your browser opens at http://127.0.0.1:5050.
+
+Python, FFmpeg and cloudflared come inside the installer, so you don't need to install anything else. Keep the black window open while you use Chipper. Close it to quit.
+
+You can add or remove the NVIDIA AI pack and the TikTok browser later in Chipper: **Settings, Files**.
+
+<details><summary>Install by hand instead (from the ZIP)</summary>
+
 1. Download this repo: the green **Code** button, then **Download ZIP**. Unzip it somewhere easy, for example `C:\Chipper`.
-2. Double-click **install-windows.bat**.
-   - If Python wasn't installed, the script installs it and asks you to run it again. Close the window and double-click **install-windows.bat** once more.
-   - It asks whether to install Whisper to make captions on your computer (about 2 GB). Say **n** if you'd rather use YouTube's own captions or a free Groq key.
-3. When it says **Done**, double-click **run-windows.bat**. Your browser opens at http://127.0.0.1:5050.
-
-Keep the black window open while you use Chipper. Close it to quit.
-
-If Windows shows "Windows protected your PC", click **More info**, then **Run anyway**.
+2. Double-click **install-windows.bat**. If Python wasn't installed, it installs it and asks you to run it again.
+3. When it says **Done**, double-click **run-windows.bat**.
+</details>
 
 ## Install on Mac
 
@@ -126,7 +134,7 @@ None of your own files are ever part of this repo: `.gitignore` keeps them out.
 
 ## Updating
 
-Download the new ZIP and copy its files over your Chipper folder. Your settings, accounts, clips and uploads stay, because they aren't in the ZIP. If something new needs installing, run the install script again.
+On Windows, run the newest installer over the old one. On Mac, or if you installed from the ZIP, download the new ZIP and copy its files over your Chipper folder. Your settings, accounts, clips and uploads stay, because they aren't in the ZIP. If something new needs installing, run the install script again.
 
 ## Troubleshooting
 

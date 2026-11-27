@@ -357,6 +357,12 @@ a.btn{text-decoration:none;display:inline-block}
 .stobar{height:10px;border-radius:6px;background:var(--panel2);overflow:hidden}.stobar div{height:100%;background:linear-gradient(90deg,var(--acc2),#ff5c7a)}
 .storow{display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--line)}.storow b{min-width:72px;text-align:right}
 .storow .mut{font-size:12px}
+.phonebox{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap;margin-top:8px}
+.qrcol{display:flex;flex-direction:column;gap:10px;align-items:center}
+.qrcard{display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px;border-radius:16px;background:#fff;border:1px solid var(--line);text-decoration:none;color:#222;font-size:12px;font-weight:600}
+.qrcard svg{display:block;width:150px;height:150px}
+.phonefields{flex:1;min-width:260px;display:flex;flex-direction:column;gap:6px}
+.copyrow code{flex:1;padding:8px 10px;border-radius:10px;background:var(--panel2);word-break:break-all;font-size:13px}
 .upgrp{margin-top:6px}.upgrp summary{cursor:pointer;padding:7px 0;font-weight:600;border-bottom:1px solid var(--line)}
 .upgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:8px;padding:8px 0}
 .upit{position:relative;display:block;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel2);cursor:pointer}
@@ -860,6 +866,7 @@ a.btn{text-decoration:none;display:inline-block}
 .pcover{display:flex;gap:12px;align-items:center;padding:4px 0 12px;border-bottom:1px solid var(--line);margin-bottom:6px}
 .pcover img{width:72px;aspect-ratio:9/16;object-fit:cover;border-radius:10px;background:#000;border:1px solid var(--line);cursor:pointer}
 .pcover b{display:block;font-size:14px}.pcover .hint{margin:2px 0 8px}
+.voicebox{display:flex;flex-direction:column;gap:8px}.voicebox textarea{width:100%;box-sizing:border-box;resize:vertical;min-height:52px;font:inherit}
 </style>
 </head>
 <body>
@@ -1196,18 +1203,29 @@ Clip the funniest moments from the podcast. 15-45 seconds. Must include #brandna
       <span id="remStat" class="mut"></span></div>
     <div id="remLink" style="margin-top:10px"></div>
     <div class="hint">Without a permanent link (below), the link changes every time it's turned on. It's also saved as “Chipper remote link.txt” in your clips folder.</div>
-    <h3 style="margin-top:22px"><svg class="i" aria-hidden="true"><use href="#i-share"/></svg>Phone notifications (free)</h3>
-    <div class="mut">Get the remote link on your phone every time Chipper starts, and a ping when each clip is ready (tap it to open the clip).</div>
-    <ol class="hint" style="margin:8px 0 0 18px;padding:0;line-height:1.7">
-      <li>Install the free <b>ntfy</b> app (Play Store / App Store).</li>
-      <li>In ntfy tap <b>+</b> → <b>Subscribe to topic</b> → enter: <code id="ntfyTopic"></code> <button class="btn sm" id="ntfyCopy"><svg class="i" aria-hidden="true"><use href="#i-copy"/></svg></button></li>
-      <li>Press <b>Send test</b> below.</li></ol>
-    <div class="set" style="margin-top:6px">
-      <div><label class="f"><input type="checkbox" id="s_notify_link"> Send the remote link when Chipper starts</label></div>
-      <div><label class="f"><input type="checkbox" id="s_notify_clips"> Notify me when a clip is ready</label></div>
+    <h3 style="margin-top:22px"><svg class="i" aria-hidden="true"><use href="#i-share"/></svg>Connect your phone</h3>
+    <div class="phonebox">
+      <div class="qrcol">
+        <a class="qrcard" id="appQrLink" target="_blank" rel="noopener" title="Download the Chipper Studio Android app">
+          <div id="appQr" aria-label="QR code: download the Android app"></div>
+          <span>Scan to download</span>
+        </a>
+        <a class="btn pri" id="appDl" target="_blank" rel="noopener"><svg class="i" aria-hidden="true"><use href="#i-download"/></svg>Download Android app</a>
+      </div>
+      <div class="phonefields">
+        <div class="mut">Install the app, turn on remote access above, then enter these two in the app's <b>Connection settings</b>:</div>
+        <label class="f">Tunnel link</label>
+        <div class="row copyrow"><code id="phLink">Turn on remote access to get the link</code><button class="btn sm" data-copy="phLink"><svg class="i" aria-hidden="true"><use href="#i-copy"/></svg>Copy</button></div>
+        <label class="f">Notification code</label>
+        <div class="row copyrow"><code id="phCode"></code><button class="btn sm" data-copy="phCode"><svg class="i" aria-hidden="true"><use href="#i-copy"/></svg>Copy</button></div>
+        <div class="hint">Then sign in with your remote password. The notification code lets the app get the new link by itself when it changes, and tell you when a clip is ready. Keep it to yourself.</div>
+        <div class="set" style="margin-top:4px">
+          <div><label class="f"><input type="checkbox" id="s_notify_link"> Send the new link to the app when Chipper starts</label></div>
+          <div><label class="f"><input type="checkbox" id="s_notify_clips"> Tell the app when a clip is ready</label></div>
+        </div>
+        <div class="row"><button class="btn sm" id="ntfyTest">🔔 Send a test to the app</button><button class="btn sm pri saveSet">Save</button></div>
+      </div>
     </div>
-    <div class="row" style="margin-top:10px"><button class="btn" id="ntfyTest">🔔 Send test</button><button class="btn pri saveSet">Save</button></div>
-    <div class="hint">The topic name is private and random. Keep it to yourself, anyone who knows it can read these notifications.</div>
   </div>
 
   <!-- Files -->
@@ -1254,7 +1272,11 @@ Clip the funniest moments from the podcast. 15-45 seconds. Must include #brandna
         <label class="f">Quality</label><select id="s_enhance_quality"><option value="MEDIUM">Medium, faster</option><option value="HIGH">High (recommended)</option><option value="ULTRA">Ultra, slowest, most detail</option></select>
         <label class="f">Sharpen after upscaling</label><select id="s_enhance_sharpen"><option value="off">Off, AI upscale only</option><option value="light">Light</option><option value="medium">Medium (recommended)</option><option value="strong">Strong, punchy, can look crunchy</option></select>
         <div class="hint">The AI upscale on its own is subtle on clean 1080p streams. Sharpening makes the difference visible after Instagram / TikTok compress the video.</div>
-        <pre id="enhLog" class="mut" style="display:none;max-height:120px;overflow:auto;font-size:11px;white-space:pre-wrap"></pre></div>
+        <pre id="enhLog" class="mut" style="display:none;max-height:120px;overflow:auto;font-size:11px;white-space:pre-wrap"></pre>
+        <div class="row" style="margin-top:8px"><button class="btn sm" id="nvRemove"><svg class="i" aria-hidden="true"><use href="#i-trash"/></svg>Remove the NVIDIA AI pack</button><span class="mut">Frees about 6 GB. You can install it again any time.</span></div></div>
+      <div><label class="f"><svg class="i" aria-hidden="true"><use href="#i-send"/></svg>TikTok posting browser</label>
+        <div class="row"><span class="mut" id="ttbStat">checking…</span><button class="btn sm" id="ttbInstall"><svg class="i" aria-hidden="true"><use href="#i-download"/></svg>Install (about 150 MB)</button></div>
+        <div class="hint">Chipper posts to TikTok through its own small browser. Only needed if you post to TikTok.</div></div>
       <div><label class="f"><input type="checkbox" id="s_keep_recordings"> Keep full recordings (2, 3 GB / hour)</label><div class="hint">Off = recordings are deleted a few minutes after a stream ends.</div></div>
     </div>
     <div class="row savebar"><button class="btn pri saveSet">Save</button><button class="btn" id="openRec"><svg class="i" aria-hidden="true"><use href="#i-folder"/></svg>Open recordings folder</button><button class="btn" id="openOut2"><svg class="i" aria-hidden="true"><use href="#i-folder"/></svg>Open clips folder</button></div>
@@ -1573,6 +1595,17 @@ Clip the funniest moments from the podcast. 15-45 seconds. Must include #brandna
           <div class="row" style="margin:6px 0"><label class="btn sm" style="cursor:pointer"><svg class="i" aria-hidden="true"><use href="#i-upload"/></svg>Add your own sound<input id="edSndFile" type="file" accept=".mp3,.wav,.ogg,.m4a,.aac,audio/*" style="display:none"></label>
             <span class="mut">e.g. a "faah" from Freesound (CC0), Pixabay or ElevenLabs</span></div>
           <div class="chips" id="edMySnds"></div>
+          <div class="sect"><svg class="i" aria-hidden="true"><use href="#i-mic"/></svg>Voice. Type a line and an English voice reads it</div>
+          <div id="edVoiceBox" class="voicebox">
+            <textarea id="edVoText" rows="2" maxlength="600" placeholder="e.g. He just sold a three million dollar car for one dollar"></textarea>
+            <div class="row"><select id="edVoVoice" style="flex:1;min-width:0" aria-label="Voice"></select>
+              <select id="edVoRate" aria-label="Speed"><option value="-15">Slower</option><option value="0" selected>Normal speed</option><option value="10">A bit faster</option><option value="20">Fast</option></select></div>
+            <label class="f"><input type="checkbox" id="edVoDuck" checked> Make the clip quieter while the voice speaks</label>
+            <div class="row"><button class="btn sm" id="edVoHook"><svg class="i" aria-hidden="true"><use href="#i-type"/></svg>Use the hook</button>
+              <button class="btn sm" id="edVoListen"><svg class="i" aria-hidden="true"><use href="#i-play"/></svg>Listen</button>
+              <button class="btn sm pri" id="edVoAdd"><svg class="i" aria-hidden="true"><use href="#i-mic"/></svg>Add at the playhead</button></div>
+            <div class="hint" id="edVoNote">A voice reading the hook in the first second helps stop the scroll.</div>
+          </div>
           <div class="sect"><svg class="i" aria-hidden="true"><use href="#i-music"/></svg>Background music</div>
           <div class="row"><select id="edMuFile" style="flex:1;min-width:0"><option value="">No music</option></select>
             <label class="btn sm" style="cursor:pointer"><svg class="i" aria-hidden="true"><use href="#i-upload"/></svg>Add music<input id="edMuUp" type="file" accept=".mp3,.wav,.ogg,.m4a,.aac,audio/*" style="display:none"></label></div>
@@ -1623,7 +1656,7 @@ Clip the funniest moments from the podcast. 15-45 seconds. Must include #brandna
     <div class="captray thtray" id="edThTray"></div>
     <nav class="edbar edthbar" aria-label="Lower thirds"><button class="barbtn" data-tht="tpl"><svg class="i" aria-hidden="true"><use href="#i-layout"/></svg><span>Template</span></button><button class="barbtn" data-tht="chan"><svg class="i" aria-hidden="true"><use href="#i-users"/></svg><span>Channel</span></button><button class="barbtn" data-tht="font"><svg class="i" aria-hidden="true"><use href="#i-type"/></svg><span>Font</span></button><button class="barbtn" data-tht="anim"><svg class="i" aria-hidden="true"><use href="#i-sparkles"/></svg><span>Animation</span></button><button class="barbtn" data-tht="add"><svg class="i" aria-hidden="true"><use href="#i-check"/></svg><span>Add to clip</span></button><button class="barbtn trimback" id="edThBack" aria-label="Back to the tools"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg><span>Back</span></button></nav>
     <div class="captray fxtray" id="edFxTray"></div>
-    <nav class="edbar edfxbar" aria-label="Audio and effects"><button class="barbtn" data-fxt="snd"><svg class="i" aria-hidden="true"><use href="#i-music"/></svg><span>Sounds</span></button><button class="barbtn" data-fxt="combo"><svg class="i" aria-hidden="true"><use href="#i-target"/></svg><span>Playhead</span></button><button class="barbtn" data-fxt="stk"><svg class="i" aria-hidden="true"><use href="#i-star"/></svg><span>Stickers</span></button><button class="barbtn" data-fxt="vfx"><svg class="i" aria-hidden="true"><use href="#i-zap"/></svg><span>Visual FX</span></button><button class="barbtn" data-fxt="loop"><svg class="i" aria-hidden="true"><use href="#i-repeat"/></svg><span>Loop &amp; rise</span></button><button class="barbtn trimback" id="edFxBack" aria-label="Back to the tools"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg><span>Back</span></button></nav>
+    <nav class="edbar edfxbar" aria-label="Audio and effects"><button class="barbtn" data-fxt="snd"><svg class="i" aria-hidden="true"><use href="#i-music"/></svg><span>Sounds</span></button><button class="barbtn" data-fxt="combo"><svg class="i" aria-hidden="true"><use href="#i-target"/></svg><span>Playhead</span></button><button class="barbtn" data-fxt="stk"><svg class="i" aria-hidden="true"><use href="#i-star"/></svg><span>Stickers</span></button><button class="barbtn" data-fxt="vfx"><svg class="i" aria-hidden="true"><use href="#i-zap"/></svg><span>Visual FX</span></button><button class="barbtn" data-fxt="voice"><svg class="i" aria-hidden="true"><use href="#i-mic"/></svg><span>Voice</span></button><button class="barbtn" data-fxt="loop"><svg class="i" aria-hidden="true"><use href="#i-repeat"/></svg><span>Loop &amp; rise</span></button><button class="barbtn trimback" id="edFxBack" aria-label="Back to the tools"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg><span>Back</span></button></nav>
     <div class="captray laytray" id="edLayTray"></div>
     <nav class="edbar edlaybar" aria-label="Layout"><button class="barbtn" data-lay="mine"><svg class="i" aria-hidden="true"><use href="#i-star"/></svg><span>My layouts</span></button><button class="barbtn" data-lay="frames"><svg class="i" aria-hidden="true"><use href="#i-image"/></svg><span>Frames</span></button><button class="barbtn" data-lay="presets"><svg class="i" aria-hidden="true"><use href="#i-layout"/></svg><span>Presets</span></button><button class="barbtn" data-lay="bg"><svg class="i" aria-hidden="true"><use href="#i-palette"/></svg><span>Background</span></button><button class="barbtn" data-lay="extra"><svg class="i" aria-hidden="true"><use href="#i-award"/></svg><span>Bar &amp; style</span></button><button class="barbtn trimback" id="edLayBack" aria-label="Back to the tools"><svg class="i" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg><span>Back</span></button></nav>
     <div class="captray imgtray" id="edImgTray"><div class="ctscroll" id="edImgRow"></div></div>
@@ -1837,7 +1870,7 @@ async function loadConfig() {
   }
   $('#outPath').textContent = CFG.settings.out_dir || '';
   if (window.edRefreshTemplates) edRefreshTemplates();
-  if ($('#ntfyTopic')) $('#ntfyTopic').textContent = CFG.settings.ntfy_topic || '';
+  if ($('#phCode')) $('#phCode').textContent = CFG.settings.ntfy_topic || '';
   if (CFG.remote) {
     ['ai', 'acc', 'remote', 'files'].forEach(k => { const b = document.querySelector(`#setNav button[data-p="${k}"]`); if (b) b.style.display = 'none'; });
     $('#remoteNote').style.display = '';
@@ -2440,6 +2473,19 @@ $('#sttInstall').onclick = async () => {
 };
 $('#enhCheck').onclick = async () => { const r = await api('/api/enhance/check', {}); if (r.ok) { toast('Testing the graphics card…'); setTimeout(enhRefresh, 1500); } };
 enhRefresh();
+async function addonsRefresh() {
+  const r = await api('/api/addons'); if (!r.ok) return;
+  $('#ttbStat').textContent = r.busy ? '⏳ ' + r.busy + '…' : r.tiktok_browser ? 'Installed' : r.error ? '⚠ ' + r.error : 'Not installed';
+  $('#ttbInstall').style.display = r.tiktok_browser ? 'none' : ''; $('#ttbInstall').disabled = !!r.busy;
+  $('#nvRemove').closest('.row').style.display = r.nvidia ? '' : 'none';
+  if (r.busy) setTimeout(addonsRefresh, 3000);
+}
+$('#ttbInstall').onclick = async () => { const r = await api('/api/addons', {do: 'tiktok_browser'}); if (r.ok) { toast('Installing the TikTok browser…'); addonsRefresh(); } };
+$('#nvRemove').onclick = async () => {
+  if (!confirm('Remove the NVIDIA AI pack (AI Enhance and GPU captions)? Clips you already enhanced stay as they are.')) return;
+  const r = await api('/api/addons', {do: 'remove_nvidia'}); if (r.ok) { toast('NVIDIA AI pack removed'); enhRefresh(); addonsRefresh(); }
+};
+addonsRefresh();
 
 /* cover tab inside the clip editor */
 const EC = {name: '', looks: [], busy: false};
@@ -2792,7 +2838,22 @@ function renderRemote(r) {
   const html = on ? `<div class="row"><a href="${esc(r.url)}" target="_blank" style="color:#7fb7ff;font-weight:700">${esc(r.url)}</a>
     <button class="btn sm" onclick="navigator.clipboard.writeText('${esc(r.url)}');toast('Link copied')"><svg class="i" aria-hidden="true"><use href="#i-copy"/></svg>Copy</button></div>` : '';
   if ($('#remLink').innerHTML !== html) $('#remLink').innerHTML = html;
+  const ph = on ? r.url : 'Turn on remote access to get the link';
+  if ($('#phLink').textContent !== ph) $('#phLink').textContent = ph;
 }
+/* the Android app: download button and a QR that opens the same link */
+const APP_DOWNLOAD = 'https://chipperstudio.nepconlabs.com/api/download?app=android';
+$('#appDl').href = $('#appQrLink').href = APP_DOWNLOAD;
+// the QR library loads after this script, so draw once the page has finished loading
+window.addEventListener('load', () => {
+  try { const q = qrcode(0, 'M'); q.addData(APP_DOWNLOAD); q.make(); $('#appQr').innerHTML = q.createSvgTag({cellSize: 4, margin: 2, scalable: true}); }
+  catch (e) { $('#appQrLink').style.display = 'none'; }
+});
+$$('[data-copy]').forEach(b => b.onclick = async () => {
+  const t = $('#' + b.dataset.copy).textContent.trim();
+  if (!t || t.startsWith('Turn on')) return toast('Turn on remote access first', true);
+  await navigator.clipboard.writeText(t); toast('Copied');
+});
 const remBody = () => ({remote_password: $('#s_remote_password').value, remote_auto: $('#s_remote_auto').checked,
   remote_tunnel_host: $('#s_remote_tunnel_host').value.trim(), remote_tunnel_token: $('#s_remote_tunnel_token').value.trim()});
 $('#remSave').onclick = async () => { if ((await api('/api/settings', remBody())).ok) { toast('Saved'); loadConfig(); } };
@@ -2801,13 +2862,12 @@ $('#remOn').onclick = async () => {
   if ((await api('/api/remote/start', {})).ok) { toast('Starting remote access…'); poll(); }
 };
 $('#remOff').onclick = async () => { await api('/api/remote/stop', {}); poll(); };
-$('#ntfyCopy').onclick = async () => { await navigator.clipboard.writeText($('#ntfyTopic').textContent); toast('Topic copied'); };
 $('#restartBtn').onclick = async () => {
   if (!confirm('Restart Chipper now? Any running recording stops. The remote link will change.')) return;
   const r = await api('/api/restart', {});
   if (r.ok) { toast('Restarting… the new link will come to your phone in about 30 s'); setTimeout(() => location.reload(), 15000); }
 };
-$('#ntfyTest').onclick = async () => { if ((await api('/api/notify/test', {})).ok) toast('Test sent, check your phone'); };
+$('#ntfyTest').onclick = async () => { if ((await api('/api/notify/test', {})).ok) toast('Test sent, check the app on your phone'); };
 
 /* ---------- finished streams (VOD) ---------- */
 function renderVod(v) {
@@ -2957,6 +3017,7 @@ $('#wAddBtn').onclick = async () => {
 $('#wAdd').addEventListener('keydown', e => { if (e.key === 'Enter') $('#wAddBtn').click(); });
 setInterval(poll, 2000);
 </script>
+<script src="/static/qrcode.js"></script>
 <script src="/static/editor.js"></script>
 <script src="/static/cover.js"></script>
 <script>

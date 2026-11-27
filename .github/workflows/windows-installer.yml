@@ -1,0 +1,70 @@
+name: Windows installer
+
+# Every push builds a test installer (a pre-release). Run it by hand with "publish" ticked to release it to everyone:
+# the website's Download for Windows button always gets the newest published one.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["README.md", "**/*.command", "install-windows.bat", "run-windows.bat"]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish to everyone (otherwise a test build)"
+        type: boolean
+        default: false
+      notes:
+        description: "What's new (shown on the release)"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-installer
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        shell: pwsh
+        run: |
+          $base = (Get-Content installer/version.txt -Raw).Trim()
+          "CHIPPER_VERSION=$base.$env:GITHUB_RUN_NUMBER" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Gather Python, FFmpeg, cloudflared and Chipper
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: ./installer/build.ps1
+
+      - name: Build the installer
+        shell: pwsh
+        run: |
+          $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          if (-not (Test-Path $iscc)) { choco install innosetup -y --no-progress; $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" }
+          & $iscc installer\chipper.iss
+          if ($LASTEXITCODE) { throw "Inno Setup failed" }
+          Get-ChildItem dist | Format-Table Name, Length
+
+      - name: Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NOTES: ${{ inputs.notes }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          $tag = "pc-v$env:CHIPPER_VERSION"
+          $file = "dist\ChipperStudioSetup-$env:CHIPPER_VERSION.exe"
+          $notes = if ($env:NOTES) { $env:NOTES } else { "Chipper Studio $env:CHIPPER_VERSION for Windows 10/11. Download the .exe and run it." }
+          $notes += "`n`nWindows may show 'Windows protected your PC' the first time: click More info, then Run anyway."
+          if ($env:PUBLISH -eq 'true') {
+            gh release create $tag $file --title "Chipper Studio $env:CHIPPER_VERSION for Windows" --notes $notes --latest
+          } else {
+            gh release create $tag $file --title "Chipper Studio $env:CHIPPER_VERSION for Windows (test)" --notes $notes --prerelease
+          }

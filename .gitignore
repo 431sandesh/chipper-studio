@@ -35,3 +35,8 @@ Thumbs.db
 
 # Tools the Mac installer downloads
 bin/
+
+# Windows installer build
+build/
+dist/
+nvvfx/

@@ -18,7 +18,13 @@ try:
 except ImportError:
     sys.exit("Flask is missing. Run:  python -m pip install flask")
 
+# The Windows installer puts ffmpeg, ffprobe and cloudflared in a "bin" folder next to Chipper
+_BIN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "bin")
+if os.path.isdir(_BIN):
+    os.environ["PATH"] = _BIN + os.pathsep + os.environ.get("PATH", "")
+
 import hashlib
+import urllib.error
 import urllib.request
 import hmac
 import re
@@ -366,11 +372,14 @@ def process_clip(task):
         words = [tuple(w) for w in m.get("words", [])] if settings["captions"] or kind != "new" else []
         if scene:
             src, st, en, sc2, w2, tmpcut = cut_source(name, m, raw, scene, words)
-            update_meta(name, status="rendering")
+            update_meta(name, status="rendering", progress=0)
+            # the app shows a progress bar for this clip: how far ffmpeg has got
+            E.PROGRESS.cb = lambda f, n=name: update_meta(n, progress=round(f * 100))
             try:
                 ok, err = E.render_scene(src, out, sc2, w2, m.get("hook"), DIRS["tmp"],
                                          start=st, end=en, assets_dir=DIRS["assets"])
             finally:
+                E.PROGRESS.cb = None
                 if tmpcut and os.path.isfile(tmpcut):
                     os.remove(tmpcut)
         else:
@@ -1193,8 +1202,16 @@ class Tunnel:
                 fails = 0
                 continue
             try:
-                urllib.request.urlopen(self.url + "/healthz", timeout=20).read()
+                req = urllib.request.Request(self.url + "/healthz", headers={"User-Agent": "Mozilla/5.0 (Chipper Studio link check)"})
+                urllib.request.urlopen(req, timeout=20).read()
                 fails = 0
+            except urllib.error.HTTPError as e:
+                # Cloudflare answering at all (e.g. 403 from bot protection on your own domain) means the link is up;
+                # only its "can't reach the computer" errors (502/530…) mean the tunnel is really down
+                if e.code in (502, 503, 504) or 520 <= e.code <= 530:
+                    fails += 1
+                else:
+                    fails = 0
             except Exception:  # noqa: BLE001
                 fails += 1
                 if fails >= 2:
@@ -2054,6 +2071,131 @@ def api_music():
     return ok(files=sorted(fs, key=lambda f: -fs[f]))
 
 
+# ---------------------------------------------------------------- Voice: text to speech (English only)
+# Microsoft's online voices through edge-tts (free, no key). Without internet or the package it falls back to
+# the voices built into Windows. Each voice is saved as a sound effect, so it renders like any other sound.
+TTS_VOICES = [
+    ("en-US-AndrewNeural", "Andrew", "US", "m"), ("en-US-BrianNeural", "Brian", "US", "m"),
+    ("en-US-GuyNeural", "Guy", "US", "m"), ("en-US-ChristopherNeural", "Christopher", "US", "m"),
+    ("en-US-AvaNeural", "Ava", "US", "f"), ("en-US-EmmaNeural", "Emma", "US", "f"),
+    ("en-US-JennyNeural", "Jenny", "US", "f"), ("en-US-AriaNeural", "Aria", "US", "f"),
+    ("en-GB-RyanNeural", "Ryan", "UK", "m"), ("en-GB-SoniaNeural", "Sonia", "UK", "f"),
+    ("en-AU-WilliamNeural", "William", "AU", "m"), ("en-AU-NatashaNeural", "Natasha", "AU", "f"),
+]
+TTS_IDS = {v[0]: v for v in TTS_VOICES}
+TTS_STATE = {"installing": False}
+
+
+def _edge_ready():
+    import importlib.util
+    return importlib.util.find_spec("edge_tts") is not None
+
+
+def tts_setup():
+    """Add the edge-tts package once (small, pure Python) so the Voice tool has natural voices."""
+    if _edge_ready() or TTS_STATE["installing"]:
+        return
+    TTS_STATE["installing"] = True
+    try:
+        log("Voice: adding the edge-tts package for natural English voices…")
+        r = E.run([sys.executable, "-m", "pip", "install", "--quiet", "edge-tts"], capture_output=True, text=True, timeout=600)
+        log("Voice: edge-tts ready" if r.returncode == 0 else "Voice: could not add edge-tts (" + (r.stderr or "")[-200:].strip() + ")")
+    except Exception as e:
+        log(f"Voice: could not add edge-tts ({e})")
+    finally:
+        TTS_STATE["installing"] = False
+
+
+def _tts_windows(text, gender, rate, wav):
+    """Offline fallback: the speech voices that come with Windows (David, Zira)."""
+    if os.name != "nt":
+        return False
+    txt = wav + ".txt"
+    with open(txt, "w", encoding="utf-8") as f:
+        f.write(text)
+    ps = ("Add-Type -AssemblyName System.Speech;$s=New-Object System.Speech.Synthesis.SpeechSynthesizer;"
+          f"try{{$s.SelectVoiceByHints([System.Speech.Synthesis.VoiceGender]::{'Female' if gender == 'f' else 'Male'})}}catch{{}};"
+          f"$s.Rate={max(-10, min(10, round(rate / 10)))};$s.SetOutputToWaveFile($env:CHIP_WAV);"
+          "$s.Speak([IO.File]::ReadAllText($env:CHIP_TXT));$s.Dispose()")
+    env = dict(os.environ, CHIP_WAV=wav, CHIP_TXT=txt)
+    try:
+        r = E.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", ps], env=env, capture_output=True, text=True, timeout=90)
+        return r.returncode == 0 and os.path.isfile(wav) and os.path.getsize(wav) > 1000
+    finally:
+        try:
+            os.remove(txt)
+        except OSError:
+            pass
+
+
+def _int(v, d=0):
+    try:
+        return int(float(v))
+    except (TypeError, ValueError):
+        return d
+
+
+def make_voice(text, voice, rate=0, pitch=0):
+    """Speak the text and save it as a sound effect. Returns (file name, seconds, which engine) or raises."""
+    v = TTS_IDS.get(voice) or TTS_VOICES[0]
+    rate, pitch = int(max(-50, min(50, rate))), int(max(-20, min(20, pitch)))
+    key = hashlib.sha1(f"{v[0]}|{rate}|{pitch}|{text}".encode()).hexdigest()[:10]
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", text).strip("_")[:28] or "voice"
+    fname = f"voice_{slug}_{key}.mp3"
+    out = os.path.join(SOUNDS_DIR, fname)
+    if os.path.isfile(out):
+        return fname, E.probe_duration(out), "saved"
+    tmp = os.path.join(HERE, "work", f"tts_{key}")
+    os.makedirs(os.path.dirname(tmp), exist_ok=True)
+    raw, by = "", ""
+    if _edge_ready():
+        with open(tmp + ".txt", "w", encoding="utf-8") as f:
+            f.write(text)
+        r = E.run([sys.executable, "-m", "edge_tts", "--voice", v[0], f"--rate={rate:+d}%", f"--pitch={pitch:+d}Hz",
+                   "--file", tmp + ".txt", "--write-media", tmp + ".mp3"], capture_output=True, text=True, timeout=90)
+        if r.returncode == 0 and os.path.isfile(tmp + ".mp3") and os.path.getsize(tmp + ".mp3") > 500:
+            raw, by = tmp + ".mp3", v[1]
+        else:
+            log("Voice: online voice failed, using the Windows voice (" + (r.stderr or "")[-160:].strip() + ")")
+    if not raw:
+        if _tts_windows(text, v[3], rate, tmp + ".wav"):
+            raw, by = tmp + ".wav", "Windows voice"
+        else:
+            raise RuntimeError("couldn't make the voice. Check the PC's internet connection and try again")
+    # trim the silence at the start and level the loudness so it sits well over the clip
+    r = E.run(["ffmpeg", "-hide_banner", "-loglevel", "error", "-y", "-i", raw,
+               "-af", "silenceremove=start_periods=1:start_threshold=-50dB,areverse,silenceremove=start_periods=1:start_threshold=-50dB,areverse,"
+                      "loudnorm=I=-14:TP=-1.5:LRA=11,aresample=44100",
+               "-c:a", "libmp3lame", "-q:a", "3", out], capture_output=True, text=True, timeout=120)
+    for p in (tmp + ".txt", tmp + ".mp3", tmp + ".wav"):
+        try:
+            os.remove(p)
+        except OSError:
+            pass
+    if r.returncode != 0 or not os.path.isfile(out):
+        raise RuntimeError("couldn't save the voice: " + (r.stderr or "")[-160:].strip())
+    return fname, E.probe_duration(out), by
+
+
+@app.get("/api/tts")
+def api_tts_voices():
+    return ok(voices=[{"id": a, "name": b, "accent": c, "gender": d} for a, b, c, d in TTS_VOICES],
+              natural=_edge_ready(), installing=TTS_STATE["installing"])
+
+
+@app.post("/api/tts")
+def api_tts():
+    j = request.get_json(force=True) or {}
+    text = re.sub(r"\s+", " ", str(j.get("text") or "")).strip()[:600]
+    if not text:
+        return fail("type what the voice should say")
+    try:
+        fname, secs, by = make_voice(text, str(j.get("voice") or ""), _int(j.get("rate"), 0), _int(j.get("pitch"), 0))
+    except Exception as e:
+        return fail(str(e))
+    return ok(file=fname, secs=round(secs, 2), by=by, sounds=list_sounds())
+
+
 @app.post("/api/sounds/delete")
 def api_sound_delete():
     p = sound_file_path((request.get_json(force=True) or {}).get("file"))
@@ -2428,6 +2570,72 @@ VSR = NV.NvidiaVSR(log)
 STT = NV.GpuWhisper(VSR, log)
 NV.STT = STT
 E.GPU_STT = STT.transcribe
+
+
+# ---------------------------------------------------------------- add-ons you can add or remove later
+def _tiktok_browser():
+    base = os.environ.get("PLAYWRIGHT_BROWSERS_PATH") or os.path.join(os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "ms-playwright")
+    try:
+        return any(d.startswith("chromium") for d in os.listdir(base))
+    except OSError:
+        return False
+
+
+ADDON = {"busy": "", "error": ""}
+
+
+def _addon_job(label, fn):
+    if ADDON["busy"]:
+        raise RuntimeError("already " + ADDON["busy"])
+    ADDON.update(busy=label, error="")
+
+    def go():
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001
+            ADDON["error"] = str(e)[:300]
+            log(f"[add-ons] {label} failed: {e}")
+        finally:
+            ADDON["busy"] = ""
+    threading.Thread(target=go, daemon=True).start()
+
+
+def _install_tiktok_browser():
+    r = E.run([sys.executable, "-m", "playwright", "install", "chromium"], capture_output=True, text=True, timeout=1800)
+    if r.returncode != 0:
+        raise RuntimeError((r.stderr or r.stdout or "playwright failed")[-200:])
+    log("[add-ons] TikTok posting browser ready")
+
+
+def _remove_nvidia():
+    if VSR.busy or STT.busy:
+        raise RuntimeError("the NVIDIA pack is busy, try again in a moment")
+    STT.stop()
+    shutil.rmtree(NV.ROOT, ignore_errors=True)
+    VSR.state, STT.state = {}, {}
+    log("[add-ons] NVIDIA AI pack removed")
+
+
+@app.get("/api/addons")
+def api_addons():
+    return ok(tiktok_browser=_tiktok_browser(), nvidia=os.path.isdir(NV.ROOT), busy=ADDON["busy"], error=ADDON["error"])
+
+
+@app.post("/api/addons")
+def api_addons_do():
+    if not is_local():
+        return fail("add or remove add-ons on the PC itself")
+    what = (request.get_json(force=True) or {}).get("do")
+    try:
+        if what == "tiktok_browser":
+            _addon_job("installing the TikTok posting browser", _install_tiktok_browser)
+        elif what == "remove_nvidia":
+            _remove_nvidia()
+        else:
+            return fail("unknown add-on")
+    except Exception as e:  # noqa: BLE001
+        return fail(e)
+    return api_addons()
 
 
 @app.post("/api/stt/install")
@@ -3757,7 +3965,8 @@ def api_clip_posts(name):
     m = read_meta(os.path.basename(name))
     if not m:
         return fail("clip not found")
-    return ok(posts=m.get("posts") or {})
+    return ok(posts=m.get("posts") or {}, status=m.get("status", ""), progress=m.get("progress", 0),
+              rendered=m.get("rendered", 0), error=m.get("error", ""))
 
 
 @app.get("/api/clips/<name>/stats")
@@ -3880,6 +4089,12 @@ def already_running():
 
 
 if __name__ == "__main__":
+    if os.name == "nt":
+        try:
+            import ctypes
+            ctypes.windll.kernel32.SetConsoleTitleW("Chipper Studio - close this window to stop Chipper")
+        except Exception:  # noqa: BLE001
+            pass
     if already_running():
         print(f"Chipper is already running on http://127.0.0.1:{PORT} - opening it instead of starting a second copy.")
         webbrowser.open(f"http://127.0.0.1:{PORT}")
@@ -3892,6 +4107,7 @@ if __name__ == "__main__":
     check_tools()
     sync_ytauth()
     threading.Thread(target=watcher.loop, daemon=True).start()
+    threading.Thread(target=tts_setup, daemon=True).start()
     log(f"Chipper Studio on http://127.0.0.1:{PORT}  (clips -> {out_dir()})")
     threading.Thread(target=tunnel.watchdog, daemon=True).start()
     if settings.get("remote_auto") and settings.get("remote_password"):
